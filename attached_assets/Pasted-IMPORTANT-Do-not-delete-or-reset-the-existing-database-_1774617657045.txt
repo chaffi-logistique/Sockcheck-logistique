@@ -1,0 +1,74 @@
+IMPORTANT: Do not delete or reset the existing database. 
+Only add new tables and columns. Preserve all existing data.
+Do not rewrite existing features, only add or improve them.
+Make a backup of the current code before any modification.
+
+---
+
+Improve this existing StockCheck app with the following changes:
+
+## 1. PACKING LIST UX
+- Make the packing list block much more visible (prominent, always 
+  on top)
+- Add a "Reset packing list" button with confirmation dialog
+- On session start: if a packing list is already active, show warning:
+  "Une packing list est déjà active. La réinitialiser ?"
+- Auto-reset packing list on new session start
+
+## 2. VARIANCE DISPLAY
+- NEVER merge positive and negative variance into one "écart" field
+- Always show separately:
+  - Écart positif (surplus) in green
+  - Écart négatif (manque) in red
+- Example: 10 blue scanned vs 8 expected = +2 positif
+           5 black scanned vs 7 expected = -2 négatif
+
+## 3. DEFECTIVE PRODUCTS
+- On each scan, add a button "Marquer comme défectueux"
+- If marked defective:
+  - Counted in total ✓
+  - NOT added to stock ✓
+  - NOT counted as conforming ✓
+  - Saved to defective registry ✓
+- Immediately prompt for:
+  - Defect type (dropdown): Tâche | Défaut de couture | Déchirure | 
+    Trou | Mauvaise fabrication | Autre
+  - Optional note
+  - Optional image (upload or camera)
+
+## 4. DEFECTIVE REGISTRY
+- Dedicated page listing all defective items
+- Each record: product_name, sku, date, defect_type, note, image_url,
+  source (reception/return)
+- Export to .xlsx button with columns:
+  Produit | SKU | Date | Source | Type défaut | Qté | Note | Image URL
+
+## 5. RETURNS MODULE
+- Add a "Retours" mode with 2 options:
+  Mode 1: With return packing list (compare expected vs received)
+  Mode 2: Free scan (no list, just log everything)
+- Both modes: allow marking returned items as defective
+
+## 6. SHOPIFY INTEGRATION
+- Read credentials from environment variables:
+  SHOPIFY_SHOP_DOMAIN, SHOPIFY_CLIENT_ID, SHOPIFY_CLIENT_SECRET
+- OAuth flow to get access token automatically on first launch
+- On conforming scan → POST /admin/api/2026-01/inventory_levels/adjust.json (+1)
+- On defective scan → NO stock update
+- On unexpected scan → NO stock update, log only
+- Register these 4 webhooks on app startup:
+  * orders/paid → decrease local stock
+  * orders/cancelled → restore local stock
+  * inventory_levels/update → sync local DB (any change anywhere)
+  * products/update → sync product data
+- Verify all webhooks with HMAC signature using SHOPIFY_WEBHOOK_SECRET
+- Respond HTTP 200 immediately to all webhooks
+- Add Settings page to input/save Shopify credentials
+
+## 7. UX
+- Mobile-first, large tap targets
+- Color coded feedback:
+  Green = conforme | Red = défectueux | Orange = inattendu | 
+  Yellow = écart
+- Session summary screen at end of scan
+- All destructive actions require confirmation

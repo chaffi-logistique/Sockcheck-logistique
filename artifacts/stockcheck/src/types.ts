@@ -21,6 +21,21 @@ export interface LogEntry {
   type: "ok" | "warn" | "err" | "info";
 }
 
+export interface DefectiveItem {
+  id?: number;
+  sessionId?: string;
+  sku: string;
+  nom: string;
+  cat: string;
+  taille: string;
+  defectType: string;
+  note: string;
+  imageUrl: string;
+  source: string;
+  date: string;
+  quantity: number;
+}
+
 export interface Session {
   id: string;
   name: string;
@@ -34,7 +49,12 @@ export interface Session {
   stockAdded: boolean;
   scans: Record<string, number>;
   log: LogEntry[];
+  defectiveItems: DefectiveItem[];
 }
 
-export type Mode = "reception" | "retour" | "test" | "inventaire";
-export type FilterType = "all" | "manquant" | "surplus" | "ok" | "inconnu";
+export type Mode = "reception" | "retour" | "retour-libre" | "test" | "inventaire";
+export type FilterType = "all" | "manquant" | "surplus" | "ok" | "inconnu" | "defectueux";
+
+export const DEFECT_TYPES = [
+  "Tâche", "Défaut de couture", "Déchirure", "Trou", "Mauvaise fabrication", "Autre"
+];

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Article, PackingItem, LogEntry, Session, Mode, FilterType } from "../types";
+import { Article, PackingItem, LogEntry, Session, Mode, DefectiveItem, DEFECT_TYPES } from "../types";
 import { api } from "../api";
 
 interface Props {
@@ -12,6 +12,7 @@ interface Props {
     scanLog: LogEntry[];
     sessionScans: Record<string, number>;
     mode: Mode;
+    defectiveInSession: DefectiveItem[];
   };
   onStateChange: (s: {
     currentSession: Session | null;
@@ -19,9 +20,26 @@ interface Props {
     scanLog: LogEntry[];
     sessionScans: Record<string, number>;
     mode: Mode;
+    defectiveInSession: DefectiveItem[];
   }) => void;
   markUnsaved: () => void;
   markSaved: () => void;
+}
+
+const MODES: { value: Mode; label: string }[] = [
+  { value: "reception", label: "Réception" },
+  { value: "retour", label: "Retour (packing)" },
+  { value: "retour-libre", label: "Retour libre" },
+  { value: "test", label: "Test" },
+  { value: "inventaire", label: "Inventaire" },
+];
+
+function nowStr() {
+  return new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function dateStr() {
+  return new Date().toISOString();
 }
 
 export default function Scanner({ catalogue, sessions, setSessions, savedState, onStateChange, markUnsaved, markSaved }: Props) {
@@ -33,139 +51,196 @@ export default function Scanner({ catalogue, sessions, setSessions, savedState, 
   const [packingList, setPackingList] = useState<PackingItem[]>(savedState.packingList);
   const [sessionScans, setSessionScans] = useState<Record<string, number>>(savedState.sessionScans);
   const [scanLog, setScanLog] = useState<LogEntry[]>(savedState.scanLog);
+  const [defectiveInSession, setDefectiveInSession] = useState<DefectiveItem[]>(savedState.defectiveInSession || []);
   const [scanFb, setScanFb] = useState<{ txt: string; type: string }>({ txt: "En attente de scan...", type: "" });
-  const [liveFilter, setLiveFilter] = useState<FilterType>("all");
+
+  // Modals
   const [showPackingModal, setShowPackingModal] = useState(false);
   const [showEndModal, setShowEndModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [showDefectModal, setShowDefectModal] = useState(false);
+  const [showSessionSummary, setShowSessionSummary] = useState(false);
+  const [showResetPackingConfirm, setShowResetPackingConfirm] = useState(false);
+  const [showActivePackingWarn, setShowActivePackingWarn] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
   const [stockAction, setStockAction] = useState<"no" | "yes">("no");
   const [endSessNote, setEndSessNote] = useState("");
+
+  // Packing list inputs
   const [plSku, setPlSku] = useState("");
   const [plQte, setPlQte] = useState(1);
   const [plSuggestions, setPlSuggestions] = useState<Article[]>([]);
+
+  // Defect modal state
+  const [defectSku, setDefectSku] = useState("");
+  const [defectNom, setDefectNom] = useState("");
+  const [defectCat, setDefectCat] = useState("");
+  const [defectTaille, setDefectTaille] = useState("");
+  const [defectType, setDefectType] = useState(DEFECT_TYPES[0]);
+  const [defectNote, setDefectNote] = useState("");
+  const [defectImageUrl, setDefectImageUrl] = useState("");
+
+  // Last scan for defect marking
+  const [lastScanSku, setLastScanSku] = useState("");
 
   const scanInputRef = useRef<HTMLInputElement>(null);
   const skuMap = useRef<Record<string, Article>>({});
 
   useEffect(() => {
     const map: Record<string, Article> = {};
-    catalogue.forEach(a => { map[a.sku] = a; map[a.sku.toUpperCase()] = a; });
+    catalogue.forEach(a => { map[a.sku] = a; });
     skuMap.current = map;
   }, [catalogue]);
 
+  const getState = useCallback(() => ({
+    currentSession, packingList, scanLog, sessionScans, mode, defectiveInSession
+  }), [currentSession, packingList, scanLog, sessionScans, mode, defectiveInSession]);
+
+  // Auto-save state
   useEffect(() => {
-    onStateChange({ currentSession, packingList, scanLog, sessionScans, mode });
-  }, [currentSession, packingList, scanLog, sessionScans, mode]);
+    const state = getState();
+    onStateChange(state);
+    api.saveState(state).then(markSaved).catch(() => markUnsaved());
+  }, [currentSession, packingList, scanLog, sessionScans, mode, defectiveInSession]);
 
-  const showFb = (txt: string, type: string) => {
+  // Keep focus on scan input
+  useEffect(() => {
+    const handler = () => setTimeout(() => scanInputRef.current?.focus(), 100);
+    document.addEventListener("click", handler);
+    scanInputRef.current?.focus();
+    return () => document.removeEventListener("click", handler);
+  }, []);
+
+  const addLog = useCallback((txt: string, icon: string, type: LogEntry["type"]) => {
+    const entry: LogEntry = { time: nowStr(), icon, txt, type };
+    setScanLog(prev => [entry, ...prev].slice(0, 200));
+  }, []);
+
+  const showFeedback = useCallback((txt: string, type: string) => {
     setScanFb({ txt, type });
-  };
+  }, []);
 
-  const updateStats = useCallback(() => {
-    return {
-      total: Object.values(sessionScans).reduce((a, b) => a + b, 0),
-      ok: Object.entries(sessionScans).filter(([sku, cnt]) => {
-        const pl = packingList.find(p => p.sku === sku);
-        return pl && cnt === pl.qte;
-      }).length,
-      prob: Object.entries(sessionScans).filter(([sku, cnt]) => {
-        const pl = packingList.find(p => p.sku === sku);
-        return !pl || cnt !== pl.qte;
-      }).length,
-    };
-  }, [sessionScans, packingList]);
-
-  const stats = updateStats();
-
-  const processScan = useCallback((raw: string) => {
+  const handleScan = useCallback(async (raw: string) => {
     const sku = raw.trim();
-    const article = skuMap.current[sku] || skuMap.current[sku.toUpperCase()];
-    const now = new Date();
-    const timeStr = now.toTimeString().substring(0, 8);
-
-    setSessionScans(prev => {
-      const updated = { ...prev, [sku]: (prev[sku] || 0) + 1 };
-      const count = updated[sku];
-
-      if (!article) {
-        showFb(`⚠ SKU inconnu : ${sku}`, "warn");
-        setScanLog(log => [{
-          time: timeStr, icon: "⚠", txt: `SKU inconnu : ${sku}`, type: "warn"
-        }, ...log.slice(0, 49)]);
-      } else {
-        const pl = packingList.find(p => p.sku === sku);
-        const expected = pl?.qte;
-        if (expected !== undefined) {
-          if (count > expected) {
-            showFb(`⬆ Surplus : ${article.nom} ${article.taille} (${count}/${expected})`, "warn");
-          } else if (count === expected) {
-            showFb(`✓ Complet : ${article.nom} ${article.taille}`, "ok");
-          } else {
-            showFb(`✓ ${article.nom} ${article.taille} (${count}/${expected})`, "ok");
-          }
-        } else {
-          showFb(`✓ ${article.nom} ${article.taille} (×${count})`, "ok");
-        }
-        setScanLog(log => [{
-          time: timeStr,
-          icon: "✓",
-          txt: `${article.nom} ${article.taille} — ${sku}`,
-          type: "ok"
-        }, ...log.slice(0, 49)]);
-      }
-      markUnsaved();
-      return updated;
-    });
-  }, [packingList, markUnsaved]);
-
-  const undoScan = () => {
-    if (!scanLog.length) return;
-    const last = scanLog[0];
-    const match = last.txt.match(/— ([A-Z0-9\-]+)$/);
-    if (!match) {
-      setScanLog(prev => prev.slice(1));
+    if (!sku) return;
+    if (!currentSession) {
+      showFeedback("⚠ Démarrez une session d'abord", "warn");
       return;
     }
-    const sku = match[1];
-    setSessionScans(prev => {
-      if (!prev[sku]) return prev;
-      const updated = { ...prev };
-      updated[sku]--;
-      if (updated[sku] <= 0) delete updated[sku];
-      return updated;
-    });
-    setScanLog(prev => prev.slice(1));
-    showFb(`↩ Annulé : ${sku}`, "info");
-    markUnsaved();
+    setLastScanSku(sku);
+    const article = skuMap.current[sku];
+    const newScans = { ...sessionScans, [sku]: (sessionScans[sku] || 0) + 1 };
+    setSessionScans(newScans);
+
+    if (!article) {
+      addLog(`SKU inconnu: ${sku}`, "❓", "warn");
+      showFeedback(`❓ SKU inconnu: ${sku}`, "warn");
+      return;
+    }
+
+    const packItem = packingList.find(p => p.sku === sku);
+    const scanned = newScans[sku];
+
+    if (packItem) {
+      const diff = scanned - packItem.qte;
+      if (diff < 0) {
+        addLog(`${article.nom} (${article.taille}) — ${scanned}/${packItem.qte}`, "📦", "ok");
+        showFeedback(`✓ ${article.nom} — ${scanned}/${packItem.qte}`, "ok");
+      } else if (diff === 0) {
+        addLog(`${article.nom} (${article.taille}) — COMPLET ✓`, "✅", "ok");
+        showFeedback(`✅ COMPLET — ${article.nom}`, "ok");
+      } else {
+        addLog(`${article.nom} (${article.taille}) — SURPLUS +${diff}`, "⚠️", "warn");
+        showFeedback(`⚠️ SURPLUS +${diff} — ${article.nom}`, "warn");
+      }
+    } else if (packingList.length > 0) {
+      addLog(`${article.nom} (${article.taille}) — Non prévu dans packing`, "🔶", "warn");
+      showFeedback(`🔶 Inattendu — ${article.nom}`, "warn");
+    } else {
+      addLog(`${article.nom} (${article.taille}) — x${scanned}`, "✓", "ok");
+      showFeedback(`✓ ${article.nom} (${article.taille})`, "ok");
+    }
+  }, [currentSession, sessionScans, packingList, addLog, showFeedback]);
+
+  const handleMarkDefective = () => {
+    if (!lastScanSku) return;
+    const article = skuMap.current[lastScanSku];
+    setDefectSku(lastScanSku);
+    setDefectNom(article?.nom || lastScanSku);
+    setDefectCat(article?.cat || "");
+    setDefectTaille(article?.taille || "");
+    setDefectType(DEFECT_TYPES[0]);
+    setDefectNote("");
+    setDefectImageUrl("");
+    setShowDefectModal(true);
+  };
+
+  const confirmDefect = async () => {
+    // Remove 1 from session scans (defective = counted but NOT added to stock)
+    const defItem: DefectiveItem = {
+      sessionId: currentSession?.id,
+      sku: defectSku,
+      nom: defectNom,
+      cat: defectCat,
+      taille: defectTaille,
+      defectType,
+      note: defectNote,
+      imageUrl: defectImageUrl,
+      source: mode,
+      date: dateStr(),
+      quantity: 1,
+    };
+    // Save to DB
+    try {
+      await api.addDefective(defItem);
+    } catch (e) {
+      console.error("Error saving defective", e);
+    }
+    setDefectiveInSession(prev => [...prev, defItem]);
+    addLog(`⚠ Défectueux: ${defectNom} — ${defectType}`, "🔴", "err");
+    showFeedback(`🔴 Défectueux enregistré — ${defectNom}`, "err");
+    setShowDefectModal(false);
+    setLastScanSku("");
   };
 
   const startSession = () => {
-    const name = sessName.trim() || `Session du ${new Date().toLocaleDateString("fr-FR")}`;
+    if (!sessName.trim()) { alert("Entrez un nom de session."); return; }
+    if (packingList.length > 0 && mode !== "retour-libre") {
+      // Warn that a packing list is active
+      setShowActivePackingWarn(true);
+      return;
+    }
+    doStartSession();
+  };
+
+  const doStartSession = () => {
+    setShowActivePackingWarn(false);
     const sess: Session = {
       id: String(Date.now()),
-      name,
+      name: sessName.trim(),
       type: sessType,
       mode,
-      shop: shopInput,
+      shop: shopInput.trim(),
       packing: [...packingList],
-      startDate: new Date().toISOString(),
+      startDate: dateStr(),
       endDate: null,
       note: "",
       stockAdded: false,
       scans: {},
       log: [],
+      defectiveItems: [],
     };
     setCurrentSession(sess);
     setSessionScans({});
     setScanLog([]);
-    setSessName(name);
-    markUnsaved();
-    setTimeout(() => scanInputRef.current?.focus(), 100);
+    setDefectiveInSession([]);
+    setLastScanSku("");
+    addLog(`Session démarrée: ${sess.name}`, "▶", "info");
+    showFeedback(`▶ Session "${sess.name}" démarrée`, "ok");
+    scanInputRef.current?.focus();
   };
 
-  const confirmEndSession = () => {
-    if (!currentSession) return;
+  const openEndModal = () => {
     setStockAction("no");
     setEndSessNote("");
     setShowEndModal(true);
@@ -173,401 +248,520 @@ export default function Scanner({ catalogue, sessions, setSessions, savedState, 
 
   const endSession = async () => {
     if (!currentSession) return;
-    const completed: Session = {
+    const finishedSession: Session = {
       ...currentSession,
-      endDate: new Date().toISOString(),
+      packing: packingList,
+      endDate: dateStr(),
       note: endSessNote,
-      scans: { ...sessionScans },
-      log: [...scanLog],
       stockAdded: stockAction === "yes",
+      scans: sessionScans,
+      log: scanLog,
+      defectiveItems: defectiveInSession,
     };
-    setSessions([completed, ...sessions]);
+    try {
+      await api.saveSession(finishedSession);
+      setSessions([finishedSession, ...sessions.filter(s => s.id !== finishedSession.id)]);
+    } catch (e) {
+      console.error("Error saving session", e);
+    }
+    setShowEndModal(false);
+    setShowSessionSummary(true);
     setCurrentSession(null);
     setSessionScans({});
     setScanLog([]);
-    setShowEndModal(false);
-    try {
-      await api.saveSession(completed);
-      await api.saveState({ currentSession: null, packingList, scanLog: [], sessionScans: {}, mode });
-      markSaved();
-    } catch (e) {
-      console.error("Error ending session", e);
-    }
+    setDefectiveInSession([]);
+    setLastScanSku("");
   };
 
-  const addPackLine = () => {
-    const sku = plSku.trim();
-    const a = skuMap.current[sku];
-    if (!sku) return;
-    if (!a) { alert(`SKU "${sku}" non trouvé dans le catalogue.`); return; }
-    setPackingList(prev => {
-      const ex = prev.find(p => p.sku === sku);
-      if (ex) return prev.map(p => p.sku === sku ? { ...p, qte: p.qte + plQte } : p);
-      return [...prev, { sku, qte: plQte, nom: a.nom, taille: a.taille }];
-    });
+  const confirmDeleteSession = async () => {
+    if (!deleteTarget) return;
+    await api.deleteSession(deleteTarget.id);
+    setSessions(sessions.filter(s => s.id !== deleteTarget.id));
+    setDeleteTarget(null);
+    setShowDeleteModal(false);
+  };
+
+  const resetPackingList = () => {
+    setPackingList([]);
+    setShowResetPackingConfirm(false);
+  };
+
+  // Packing list management
+  const addPackingItem = () => {
+    const art = Object.values(skuMap.current).find(a => a.sku === plSku) || plSuggestions[0];
+    if (!art) { alert("SKU introuvable"); return; }
+    const exists = packingList.find(p => p.sku === art.sku);
+    if (exists) {
+      setPackingList(packingList.map(p => p.sku === art.sku ? { ...p, qte: p.qte + plQte } : p));
+    } else {
+      setPackingList([...packingList, { sku: art.sku, qte: plQte, nom: art.nom, taille: art.taille }]);
+    }
     setPlSku("");
     setPlQte(1);
     setPlSuggestions([]);
-    markUnsaved();
   };
 
-  const removePl = (i: number) => {
-    setPackingList(prev => prev.filter((_, idx) => idx !== i));
-    markUnsaved();
+  const handlePlSkuChange = (val: string) => {
+    setPlSku(val);
+    if (val.length > 1) {
+      const lower = val.toLowerCase();
+      setPlSuggestions(catalogue.filter(a =>
+        a.sku.toLowerCase().includes(lower) || a.nom.toLowerCase().includes(lower)
+      ).slice(0, 6));
+    } else {
+      setPlSuggestions([]);
+    }
   };
 
-  const plSuggest = (q: string) => {
-    setPlSku(q);
-    if (!q) { setPlSuggestions([]); return; }
-    const lq = q.toLowerCase();
-    setPlSuggestions(catalogue.filter(a =>
-      a.sku.toLowerCase().includes(lq) || a.nom.toLowerCase().includes(lq)
-    ).slice(0, 8));
-  };
-
-  const packSummary = packingList.length === 0
-    ? "Aucune packing list"
-    : `${packingList.length} références · ${packingList.reduce((s, p) => s + p.qte, 0)} articles attendus`;
-
-  // Build live table rows
+  // Build live table rows with separate pos/neg variance
   const liveRows = (() => {
-    const rows: {
-      sku: string; article: Article | null; cnt: number; qte: number | undefined; ecart: number;
-    }[] = [];
-    const seen = new Set<string>();
-    (currentSession?.packing || packingList).forEach(pl => {
-      seen.add(pl.sku);
-      const cnt = sessionScans[pl.sku] || 0;
-      rows.push({ sku: pl.sku, article: skuMap.current[pl.sku] || null, cnt, qte: pl.qte, ecart: cnt - pl.qte });
+    const rows: { sku: string; nom: string; taille: string; cat: string; scanned: number; expected: number | null; ecartPos: number; ecartNeg: number; type: "ok" | "manquant" | "surplus" | "inconnu" }[] = [];
+    const skusDone = new Set<string>();
+    packingList.forEach(pl => {
+      const scanned = sessionScans[pl.sku] || 0;
+      const diff = scanned - pl.qte;
+      const art = skuMap.current[pl.sku];
+      rows.push({
+        sku: pl.sku, nom: art?.nom || pl.nom, taille: art?.taille || pl.taille, cat: art?.cat || "",
+        scanned, expected: pl.qte,
+        ecartPos: diff > 0 ? diff : 0,
+        ecartNeg: diff < 0 ? diff : 0,
+        type: diff === 0 ? "ok" : diff > 0 ? "surplus" : "manquant",
+      });
+      skusDone.add(pl.sku);
     });
     Object.entries(sessionScans).forEach(([sku, cnt]) => {
-      if (seen.has(sku)) return;
-      rows.push({ sku, article: skuMap.current[sku] || null, cnt, qte: undefined, ecart: cnt });
+      if (skusDone.has(sku)) return;
+      const art = skuMap.current[sku];
+      rows.push({ sku, nom: art?.nom || sku, taille: art?.taille || "—", cat: art?.cat || "", scanned: cnt, expected: null, ecartPos: 0, ecartNeg: 0, type: "inconnu" });
     });
-    return rows.filter(r => {
-      if (liveFilter === "all") return true;
-      if (liveFilter === "manquant") return r.ecart < 0;
-      if (liveFilter === "surplus") return r.ecart > 0 && r.qte !== undefined;
-      if (liveFilter === "ok") return r.ecart === 0 && r.qte !== undefined;
-      if (liveFilter === "inconnu") return r.article === null;
-      return true;
-    });
+    return rows;
   })();
 
+  const defectiveSkus = new Set(defectiveInSession.map(d => d.sku));
+  const totalScanned = Object.values(sessionScans).reduce((a, b) => a + b, 0);
+  const totalDefective = defectiveInSession.length;
+  const totalExpected = packingList.reduce((s, p) => s + p.qte, 0);
+
+  // Build summary for ended session
+  const [lastEndedSession, setLastEndedSession] = useState<Session | null>(null);
+  const handleCloseSummary = () => {
+    setShowSessionSummary(false);
+    setLastEndedSession(null);
+  };
+
+  const sessionRunning = !!currentSession;
+
   return (
-    <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
-      {/* SIDEBAR */}
-      <div style={{
-        width: 320, background: "var(--surface)", borderRight: "1px solid var(--border)",
-        display: "flex", flexDirection: "column", overflowY: "auto", padding: 16, gap: 14
-      }}>
-
-        {/* Mode */}
-        <div>
-          <div className="section-label">Mode de session</div>
-          <div className="mode-grid">
-            {([
-              { key: "reception", icon: "📥", label: "Réception", sub: "Stock entrant" },
-              { key: "retour", icon: "↩", label: "Retour Shop", sub: "Magasin partenaire" },
-              { key: "test", icon: "🧪", label: "Test", sub: "Sans impact stock" },
-              { key: "inventaire", icon: "🔍", label: "Inventaire", sub: "Comptage seul" },
-            ] as const).map(m => (
-              <button
-                key={m.key}
-                className={`mode-btn${mode === m.key ? " active" : ""}`}
-                onClick={() => setMode(m.key as Mode)}
-              >
-                {m.icon} {m.label}<br /><small style={{ fontWeight: 400, opacity: .7 }}>{m.sub}</small>
-              </button>
+    <div className="scanner-page">
+      {/* ── PACKING LIST (always prominent) ─────────────────────────── */}
+      {(packingList.length > 0 || showPackingModal) && !currentSession && (
+        <div className="packing-banner">
+          <div className="packing-banner-header">
+            <strong>📋 Packing List active ({packingList.length} référence{packingList.length > 1 ? "s" : ""}, {packingList.reduce((s, p) => s + p.qte, 0)} pcs)</strong>
+            <div className="packing-banner-actions">
+              <button className="btn btn-sm btn-outline" onClick={() => setShowPackingModal(true)}>Modifier</button>
+              <button className="btn btn-sm btn-danger" onClick={() => setShowResetPackingConfirm(true)}>🗑 Réinitialiser</button>
+            </div>
+          </div>
+          <div className="packing-mini-list">
+            {packingList.slice(0, 5).map(p => (
+              <span key={p.sku} className="packing-mini-item">{p.nom} {p.taille} ×{p.qte}</span>
             ))}
+            {packingList.length > 5 && <span className="packing-mini-item muted">+{packingList.length - 5} autres</span>}
           </div>
         </div>
+      )}
 
-        {mode === "retour" && (
-          <div>
-            <label>Magasin partenaire</label>
-            <input type="text" value={shopInput} onChange={e => setShopInput(e.target.value)} placeholder="Nom du magasin..." />
-          </div>
-        )}
-
-        {mode !== "retour" && mode !== "inventaire" && (
-          <div>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-              <div className="section-label" style={{ margin: 0 }}>Packing List</div>
-              <button className="btn btn-ghost btn-sm" onClick={() => setShowPackingModal(true)}>Définir</button>
+      <div className="scanner-layout">
+        {/* LEFT PANEL: Setup + scan */}
+        <div className="scanner-left">
+          {/* Session setup */}
+          {!sessionRunning ? (
+            <div className="card">
+              <div className="card-title">Nouvelle session</div>
+              <div className="form-row">
+                <label>Mode</label>
+                <select value={mode} onChange={e => setMode(e.target.value as Mode)}>
+                  {MODES.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+                </select>
+              </div>
+              <div className="form-row">
+                <label>Nom de session</label>
+                <input value={sessName} onChange={e => setSessName(e.target.value)} placeholder="ex: Réception Paris 2025-01" />
+              </div>
+              <div className="form-row">
+                <label>Type</label>
+                <select value={sessType} onChange={e => setSessType(e.target.value)}>
+                  <option value="officielle">Officielle</option>
+                  <option value="test">Test</option>
+                  <option value="inventaire">Inventaire</option>
+                  <option value="retour">Retour</option>
+                </select>
+              </div>
+              <div className="form-row">
+                <label>Boutique / Lieu</label>
+                <input value={shopInput} onChange={e => setShopInput(e.target.value)} placeholder="ex: Entrepôt Paris" />
+              </div>
+              {(mode === "reception" || mode === "retour" || mode === "inventaire") && (
+                <button className="btn btn-outline btn-sm mt-sm" onClick={() => setShowPackingModal(true)}>
+                  📋 {packingList.length > 0 ? `Modifier packing list (${packingList.length} réf.)` : "Configurer packing list"}
+                </button>
+              )}
+              <button className="btn btn-primary mt-sm" style={{ width: "100%" }} onClick={startSession}>
+                ▶ Démarrer la session
+              </button>
             </div>
-            <div style={{ fontSize: 12, color: "var(--muted)" }}>{packSummary}</div>
-          </div>
-        )}
-
-        <div className="divider" />
-
-        {/* Session */}
-        <div>
-          <div className="section-label">Session</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <div>
-              <label>Nom de la session</label>
-              <input type="text" value={sessName} onChange={e => setSessName(e.target.value)} placeholder="ex: Réception Pinky Drop" />
-            </div>
-            <div>
-              <label>Type</label>
-              <select value={sessType} onChange={e => setSessType(e.target.value)}>
-                <option value="officielle">Session officielle</option>
-                <option value="test">Test interne</option>
-                <option value="fast">Fast test</option>
-              </select>
-            </div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button
-                className="btn btn-primary btn-lg"
-                style={{ flex: 1 }}
-                onClick={startSession}
-                disabled={!!currentSession}
-              >▶ Démarrer</button>
-              <button
-                className="btn btn-danger btn-lg"
-                onClick={confirmEndSession}
-                disabled={!currentSession}
-              >■ Terminer</button>
-            </div>
-          </div>
-        </div>
-
-        {/* Scan zone */}
-        <div>
-          <div className="section-label">Zone de scan</div>
-          <div className={`scan-zone${currentSession ? " active-scan" : ""}`}>
-            <label>Positionne le curseur ici → scanner avec la scanette</label>
-            <input
-              ref={scanInputRef}
-              type="text"
-              className="scan-input"
-              placeholder="Scan ou SKU + Entrée"
-              autoComplete="off"
-              disabled={!currentSession}
-              onKeyDown={e => {
-                if (e.key === "Enter") {
-                  const v = (e.target as HTMLInputElement).value.trim();
-                  if (v && currentSession) processScan(v);
-                  (e.target as HTMLInputElement).value = "";
-                }
-              }}
-            />
-          </div>
-          <div className={`scan-fb${scanFb.type ? " " + scanFb.type : ""}`} style={{ marginTop: 8 }}>
-            {scanFb.txt}
-          </div>
-        </div>
-
-        {/* Stats */}
-        <div className="stats-row">
-          <div className="stat-mini">
-            <div className="stat-mini-n" style={{ color: "var(--acc)" }}>{stats.total}</div>
-            <div className="stat-mini-l">Total</div>
-          </div>
-          <div className="stat-mini">
-            <div className="stat-mini-n" style={{ color: "var(--green)" }}>{stats.ok}</div>
-            <div className="stat-mini-l">Conformes</div>
-          </div>
-          <div className="stat-mini">
-            <div className="stat-mini-n" style={{ color: "var(--red)" }}>{stats.prob}</div>
-            <div className="stat-mini-l">Écarts</div>
-          </div>
-        </div>
-
-        <button className="btn btn-ghost btn-sm" onClick={undoScan} style={{ width: "100%" }}>↩ Annuler dernier scan</button>
-
-        {/* Log */}
-        <div className="log-box">
-          <div className="log-hd">Historique de scan</div>
-          <div className="log-scroll">
-            {scanLog.length === 0
-              ? <div style={{ padding: 10, textAlign: "center", color: "var(--muted)", fontSize: 12 }}>Aucun scan</div>
-              : scanLog.map((e, i) => (
-                <div key={i} className="log-entry">
-                  <span className="log-time">{e.time}</span>
-                  <span className="log-icon">{e.icon}</span>
-                  <span className="log-txt">{e.txt}</span>
+          ) : (
+            <div className="card session-active-card">
+              <div className="session-active-header">
+                <div>
+                  <div className="session-active-name">{currentSession.name}</div>
+                  <div className="session-active-meta">
+                    <span className="badge badge-blue">{MODES.find(m => m.value === currentSession.mode)?.label}</span>
+                    {currentSession.shop && <span className="badge badge-gray">{currentSession.shop}</span>}
+                  </div>
                 </div>
-              ))
-            }
-          </div>
-        </div>
-      </div>
+                <div className="session-counters">
+                  <div className="counter-chip"><span>{totalScanned}</span><small>scannés</small></div>
+                  {totalExpected > 0 && <div className="counter-chip"><span>{totalExpected}</span><small>attendus</small></div>}
+                  {totalDefective > 0 && <div className="counter-chip counter-red"><span>{totalDefective}</span><small>défectueux</small></div>}
+                </div>
+              </div>
 
-      {/* MAIN */}
-      <div style={{ display: "flex", flexDirection: "column", flex: 1, overflow: "hidden" }}>
-        <div className="session-bar">
-          <div className="sess-status">
-            <div className={`sess-dot${currentSession ? " active" : " idle"}`} />
-            <span>{currentSession ? currentSession.name : "Aucune session active"}</span>
-          </div>
-          {currentSession && (
-            <span style={{ color: "var(--muted)" }}>{currentSession.type} · {currentSession.mode}</span>
+              {/* Scan input */}
+              <div className="scan-input-block">
+                <input
+                  ref={scanInputRef}
+                  className="scan-input"
+                  placeholder="Scanner un code SKU..."
+                  autoComplete="off"
+                  onKeyDown={e => {
+                    if (e.key === "Enter") {
+                      const val = (e.target as HTMLInputElement).value;
+                      (e.target as HTMLInputElement).value = "";
+                      handleScan(val);
+                    }
+                  }}
+                />
+              </div>
+
+              {/* Feedback */}
+              <div className={`scan-feedback scan-feedback-${scanFb.type}`}>
+                {scanFb.txt}
+              </div>
+
+              {/* Mark defective button */}
+              {lastScanSku && (
+                <button className="btn btn-danger btn-sm mark-defective-btn" onClick={handleMarkDefective}>
+                  🔴 Marquer comme défectueux ({lastScanSku})
+                </button>
+              )}
+
+              <div className="session-actions">
+                <button className="btn btn-outline btn-sm" onClick={() => setShowDeleteModal(true)}>🗑 Annuler session</button>
+                <button className="btn btn-warning btn-sm" onClick={openEndModal}>⏹ Terminer session</button>
+              </div>
+            </div>
           )}
-          <div className="spacer" />
-          <div className="filter-btns">
-            {(["all", "manquant", "surplus", "ok", "inconnu"] as FilterType[]).map(f => (
-              <button
-                key={f}
-                className={`fbtn${liveFilter === f ? " active" : ""}`}
-                onClick={() => setLiveFilter(f)}
-              >
-                {{ all: "Tous", manquant: "Manquants", surplus: "Surplus", ok: "Conformes", inconnu: "Inconnus" }[f]}
-              </button>
-            ))}
+
+          {/* Log */}
+          <div className="card log-card">
+            <div className="card-title">Journal de scan</div>
+            <div className="log-list">
+              {scanLog.length === 0 ? (
+                <div className="muted text-center">Aucun scan enregistré</div>
+              ) : scanLog.map((l, i) => (
+                <div key={i} className={`log-entry log-${l.type}`}>
+                  <span className="log-time">{l.time}</span>
+                  <span className="log-icon">{l.icon}</span>
+                  <span className="log-txt">{l.txt}</span>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
 
-        <div className="scroll">
-          <table className="tbl">
-            <thead>
-              <tr>
-                <th>Article</th>
-                <th>SKU</th>
-                <th>Catégorie</th>
-                <th>Taille</th>
-                <th>Attendu</th>
-                <th>Scanné</th>
-                <th>Progression</th>
-                <th>Écart</th>
-              </tr>
-            </thead>
-            <tbody>
-              {liveRows.length === 0 ? (
-                <tr><td colSpan={8} style={{ textAlign: "center", padding: 48, color: "var(--muted)" }}>
-                  {currentSession ? "Aucun article pour ce filtre" : "Démarre une session pour voir le suivi en temps réel"}
-                </td></tr>
-              ) : liveRows.map(r => {
-                const pct = r.qte ? Math.min(100, Math.round((r.cnt / r.qte) * 100)) : 100;
-                const bc = r.qte === undefined ? "ok" : r.cnt > r.qte ? "over" : r.cnt < r.qte ? "low" : "ok";
-                const ecart = r.qte === undefined ? `+${r.cnt}` : r.ecart === 0 ? "✓" : r.ecart > 0 ? `+${r.ecart}` : String(r.ecart);
-                const ecartClass = r.ecart === 0 ? "zero" : r.ecart > 0 ? "pos" : "neg";
-                const badgeClass = r.ecart === 0 ? "badge-green" : r.ecart < 0 ? "badge-red" : "badge-orange";
-                return (
-                  <tr key={r.sku}>
-                    <td>{r.article ? r.article.nom : <span style={{ color: "var(--red)" }}>SKU inconnu</span>}</td>
-                    <td style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--muted)" }}>{r.sku}</td>
-                    <td>{r.article ? <span className="badge badge-grey">{r.article.cat}</span> : "—"}</td>
-                    <td>{r.article ? <span className="badge badge-blue">{r.article.taille}</span> : "—"}</td>
-                    <td style={{ textAlign: "center", color: "var(--muted)" }}>{r.qte ?? "—"}</td>
-                    <td style={{ textAlign: "center", fontWeight: 600 }}>{r.cnt}</td>
-                    <td>
-                      <div className="prog">
-                        <div className="prog-bar"><div className={`prog-fill ${bc}`} style={{ width: `${pct}%` }} /></div>
-                        <span className="prog-lbl">{r.cnt}/{r.qte ?? "?"}</span>
+        {/* RIGHT PANEL: Live tracking */}
+        <div className="scanner-right">
+          <div className="card" style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+            <div className="card-title" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <span>Suivi en temps réel</span>
+              <span className="badge badge-blue">{liveRows.length} réf.</span>
+            </div>
+
+            {liveRows.length === 0 ? (
+              <div className="muted text-center" style={{ padding: "2rem" }}>Aucun scan dans cette session</div>
+            ) : (
+              <div className="live-table-wrap">
+                <table className="live-table">
+                  <thead>
+                    <tr>
+                      <th>SKU</th>
+                      <th>Produit</th>
+                      <th>Taille</th>
+                      <th>Scanné</th>
+                      <th>Attendu</th>
+                      <th>Écart +</th>
+                      <th>Écart −</th>
+                      <th>Statut</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {liveRows.map(r => (
+                      <tr key={r.sku} className={`row-${r.type}${defectiveSkus.has(r.sku) ? " row-defective" : ""}`}>
+                        <td className="mono">{r.sku}</td>
+                        <td>{r.nom}</td>
+                        <td>{r.taille}</td>
+                        <td className="num">{r.scanned}</td>
+                        <td className="num">{r.expected ?? "—"}</td>
+                        <td className="num ecart-pos">{r.ecartPos > 0 ? `+${r.ecartPos}` : "—"}</td>
+                        <td className="num ecart-neg">{r.ecartNeg < 0 ? `${r.ecartNeg}` : "—"}</td>
+                        <td>
+                          {defectiveSkus.has(r.sku) ? <span className="badge badge-red">Défectueux</span> :
+                            r.type === "ok" ? <span className="badge badge-green">Conforme</span> :
+                            r.type === "surplus" ? <span className="badge badge-orange">Surplus</span> :
+                            r.type === "manquant" ? <span className="badge badge-red">Manquant</span> :
+                            <span className="badge badge-gray">Inconnu</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* Packing list quick view during session */}
+          {sessionRunning && packingList.length > 0 && (
+            <div className="card packing-session-card">
+              <div className="card-title">Packing List</div>
+              <div className="packing-progress-list">
+                {packingList.map(p => {
+                  const scanned = sessionScans[p.sku] || 0;
+                  const pct = Math.min((scanned / p.qte) * 100, 100);
+                  const diff = scanned - p.qte;
+                  return (
+                    <div key={p.sku} className="packing-progress-item">
+                      <div className="packing-progress-header">
+                        <span>{p.nom} {p.taille}</span>
+                        <span className={diff > 0 ? "ecart-pos" : diff < 0 ? "ecart-neg" : "ecart-ok"}>
+                          {scanned}/{p.qte}
+                          {diff > 0 && <> <span className="ecart-pos">+{diff}</span></>}
+                          {diff < 0 && <> <span className="ecart-neg">{diff}</span></>}
+                        </span>
                       </div>
-                    </td>
-                    <td><span className={`badge ${badgeClass}`}>{ecart}</span></td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                      <div className="progress-bar">
+                        <div className="progress-fill" style={{ width: `${pct}%`, background: diff > 0 ? "var(--orange)" : diff === 0 && scanned > 0 ? "var(--green)" : "var(--blue)" }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* PACKING MODAL */}
+      {/* ── PACKING LIST MODAL ────────────────────────────────────────── */}
       {showPackingModal && (
-        <div className="modal-bg" onClick={e => { if (e.target === e.currentTarget) setShowPackingModal(false); }}>
-          <div className="modal" style={{ width: 620 }}>
-            <div className="modal-hd">
-              <div className="modal-hd-title">Packing List</div>
-              <button className="btn btn-ghost btn-sm" onClick={() => setShowPackingModal(false)}>✕</button>
+        <div className="modal-overlay" onClick={() => setShowPackingModal(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>📋 Packing List</h3>
+              <button className="modal-close" onClick={() => setShowPackingModal(false)}>✕</button>
             </div>
             <div className="modal-body">
-              <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr auto", gap: 8, alignItems: "end" }}>
-                <div style={{ position: "relative" }}>
-                  <label>SKU</label>
-                  <input type="text" value={plSku} onChange={e => plSuggest(e.target.value)} placeholder="ex: TEE-M-FLGO" />
+              <div className="pl-add-row">
+                <div style={{ position: "relative", flex: 2 }}>
+                  <input
+                    value={plSku}
+                    onChange={e => handlePlSkuChange(e.target.value)}
+                    placeholder="SKU ou nom article..."
+                    style={{ width: "100%" }}
+                  />
                   {plSuggestions.length > 0 && (
-                    <div style={{
-                      position: "absolute", top: "100%", left: 0, right: 0,
-                      border: "1px solid var(--border2)", borderRadius: "var(--radius)",
-                      marginTop: 2, maxHeight: 120, overflowY: "auto",
-                      background: "var(--surface)", boxShadow: "var(--shadow)", zIndex: 100
-                    }}>
+                    <div className="autocomplete-dropdown">
                       {plSuggestions.map(a => (
-                        <div
-                          key={a.sku}
-                          style={{ padding: "7px 12px", cursor: "pointer", fontSize: 12, display: "flex", justifyContent: "space-between", gap: 12, borderBottom: "1px solid var(--border)" }}
-                          onMouseDown={() => { setPlSku(a.sku); setPlSuggestions([]); }}
-                        >
-                          <span style={{ fontFamily: "var(--mono)" }}>{a.sku}</span>
-                          <span style={{ color: "var(--muted)" }}>{a.nom} · {a.taille}</span>
+                        <div key={a.sku} className="autocomplete-item" onClick={() => { setPlSku(a.sku); setPlSuggestions([]); }}>
+                          <span className="mono">{a.sku}</span> — {a.nom} {a.taille}
                         </div>
                       ))}
                     </div>
                   )}
                 </div>
-                <div>
-                  <label>Qté attendue</label>
-                  <input type="number" value={plQte} min={1} onChange={e => setPlQte(parseInt(e.target.value) || 1)} />
-                </div>
-                <button className="btn btn-primary" style={{ height: 36 }} onClick={addPackLine}>+ Ajouter</button>
+                <input type="number" min={1} value={plQte} onChange={e => setPlQte(parseInt(e.target.value) || 1)} style={{ width: 70 }} />
+                <button className="btn btn-primary btn-sm" onClick={addPackingItem}>+ Ajouter</button>
               </div>
-              <table className="tbl">
-                <thead><tr><th>SKU</th><th>Article</th><th>Taille</th><th>Qté</th><th></th></tr></thead>
-                <tbody>
-                  {packingList.length === 0
-                    ? <tr><td colSpan={5} style={{ textAlign: "center", padding: 20, color: "var(--muted)" }}>Aucune ligne</td></tr>
-                    : packingList.map((p, i) => (
-                      <tr key={i}>
-                        <td style={{ fontFamily: "var(--mono)", fontSize: 11 }}>{p.sku}</td>
-                        <td>{p.nom}</td>
-                        <td><span className="badge badge-blue">{p.taille}</span></td>
-                        <td style={{ fontWeight: 600, textAlign: "center" }}>{p.qte}</td>
-                        <td><button className="btn btn-danger btn-sm" onClick={() => removePl(i)}>✕</button></td>
-                      </tr>
-                    ))
-                  }
-                </tbody>
-              </table>
-            </div>
-            <div className="modal-ft">
-              <button className="btn btn-outline btn-sm" onClick={() => { setPackingList([]); markUnsaved(); }}>Vider</button>
-              <button className="btn btn-primary" onClick={() => setShowPackingModal(false)}>✓ Valider</button>
+              <div className="pl-list">
+                {packingList.length === 0 ? (
+                  <div className="muted text-center" style={{ padding: "1rem" }}>Aucune référence ajoutée</div>
+                ) : (
+                  <table style={{ width: "100%" }}>
+                    <thead><tr><th>SKU</th><th>Produit</th><th>Taille</th><th>Qté</th><th></th></tr></thead>
+                    <tbody>
+                      {packingList.map(p => (
+                        <tr key={p.sku}>
+                          <td className="mono">{p.sku}</td>
+                          <td>{p.nom}</td>
+                          <td>{p.taille}</td>
+                          <td>
+                            <input type="number" min={1} value={p.qte} style={{ width: 60 }}
+                              onChange={e => setPackingList(packingList.map(x => x.sku === p.sku ? { ...x, qte: parseInt(e.target.value) || 1 } : x))} />
+                          </td>
+                          <td><button className="btn btn-danger btn-sm" onClick={() => setPackingList(packingList.filter(x => x.sku !== p.sku))}>✕</button></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+              {packingList.length > 0 && (
+                <div style={{ marginTop: "1rem", display: "flex", justifyContent: "space-between" }}>
+                  <button className="btn btn-danger btn-sm" onClick={() => setShowResetPackingConfirm(true)}>🗑 Tout effacer</button>
+                  <button className="btn btn-primary" onClick={() => setShowPackingModal(false)}>✓ Confirmer</button>
+                </div>
+              )}
             </div>
           </div>
         </div>
       )}
 
-      {/* END SESSION MODAL */}
-      {showEndModal && currentSession && (
-        <div className="modal-bg" onClick={e => { if (e.target === e.currentTarget) setShowEndModal(false); }}>
-          <div className="modal" style={{ width: 480 }}>
-            <div className="modal-hd">
-              <div className="modal-hd-title">Terminer la session</div>
-              <button className="btn btn-ghost btn-sm" onClick={() => setShowEndModal(false)}>✕</button>
+      {/* ── RESET PACKING CONFIRM ────────────────────────────────────── */}
+      {showResetPackingConfirm && (
+        <div className="modal-overlay">
+          <div className="modal modal-sm">
+            <div className="modal-header"><h3>Réinitialiser la packing list ?</h3></div>
+            <div className="modal-body">
+              <p>Cette action supprimera toutes les références de la packing list actuelle.</p>
+              <div className="modal-footer">
+                <button className="btn btn-outline" onClick={() => setShowResetPackingConfirm(false)}>Annuler</button>
+                <button className="btn btn-danger" onClick={resetPackingList}>🗑 Réinitialiser</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── ACTIVE PACKING WARN ──────────────────────────────────────── */}
+      {showActivePackingWarn && (
+        <div className="modal-overlay">
+          <div className="modal modal-sm">
+            <div className="modal-header"><h3>⚠️ Packing list déjà active</h3></div>
+            <div className="modal-body">
+              <p>Une packing list est déjà configurée ({packingList.length} références). Voulez-vous la réinitialiser avant de démarrer la session ?</p>
+              <div className="modal-footer">
+                <button className="btn btn-outline" onClick={() => { setShowActivePackingWarn(false); doStartSession(); }}>Conserver et démarrer</button>
+                <button className="btn btn-warning" onClick={() => { resetPackingList(); doStartSession(); }}>Réinitialiser et démarrer</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── DEFECT MODAL ─────────────────────────────────────────────── */}
+      {showDefectModal && (
+        <div className="modal-overlay" onClick={() => setShowDefectModal(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>🔴 Article défectueux</h3>
+              <button className="modal-close" onClick={() => setShowDefectModal(false)}>✕</button>
             </div>
             <div className="modal-body">
-              <p style={{ color: "var(--text2)" }}>Tu es sur le point de clôturer cette session.</p>
-              <div style={{ background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: 12, fontSize: 13 }}>
-                <div style={{ fontWeight: 600, marginBottom: 4 }}>{currentSession.name} — {currentSession.type}</div>
-                <div style={{ color: "var(--muted)" }}>
-                  {Object.values(sessionScans).reduce((a, b) => a + b, 0)} articles scannés
-                </div>
+              <p><strong>{defectNom}</strong> — SKU: <code>{defectSku}</code></p>
+              <div className="form-row">
+                <label>Type de défaut *</label>
+                <select value={defectType} onChange={e => setDefectType(e.target.value)}>
+                  {DEFECT_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
               </div>
-              <div>
-                <label>Note sur la session (optionnel)</label>
-                <textarea value={endSessNote} onChange={e => setEndSessNote(e.target.value)} placeholder="Ex: Réception complète..." style={{ height: 70, resize: "none" }} />
+              <div className="form-row">
+                <label>Note (optionnel)</label>
+                <textarea value={defectNote} onChange={e => setDefectNote(e.target.value)} rows={2} placeholder="Description du défaut..." />
               </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                <label style={{ fontSize: 12, fontWeight: 600, marginBottom: 2 }}>Impact sur le stock :</label>
-                <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 400, cursor: "pointer" }}>
-                  <input type="radio" name="stockAction" value="no" checked={stockAction === "no"} onChange={() => setStockAction("no")} />
-                  Ne pas modifier le stock (phase de test)
-                </label>
-                <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 400, cursor: "pointer" }}>
-                  <input type="radio" name="stockAction" value="yes" checked={stockAction === "yes"} onChange={() => setStockAction("yes")} />
-                  Ajouter au stock de référence (session officielle)
-                </label>
+              <div className="form-row">
+                <label>URL image (optionnel)</label>
+                <input value={defectImageUrl} onChange={e => setDefectImageUrl(e.target.value)} placeholder="https://..." />
+              </div>
+              <div className="modal-footer">
+                <button className="btn btn-outline" onClick={() => setShowDefectModal(false)}>Annuler</button>
+                <button className="btn btn-danger" onClick={confirmDefect}>🔴 Confirmer défectueux</button>
               </div>
             </div>
-            <div className="modal-ft">
-              <button className="btn btn-outline" onClick={() => setShowEndModal(false)}>Annuler</button>
-              <button className="btn btn-danger" onClick={endSession}>■ Clôturer la session</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── END SESSION MODAL ────────────────────────────────────────── */}
+      {showEndModal && (
+        <div className="modal-overlay" onClick={() => setShowEndModal(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>⏹ Terminer la session</h3>
+              <button className="modal-close" onClick={() => setShowEndModal(false)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <div className="summary-stats">
+                <div className="stat-box"><span>{totalScanned}</span><small>Total scanné</small></div>
+                {totalExpected > 0 && <div className="stat-box"><span>{totalExpected}</span><small>Attendus</small></div>}
+                {totalDefective > 0 && <div className="stat-box stat-red"><span>{totalDefective}</span><small>Défectueux</small></div>}
+                <div className="stat-box stat-green"><span>{totalScanned - totalDefective}</span><small>Conformes</small></div>
+              </div>
+              <div className="form-row">
+                <label>Note de clôture</label>
+                <textarea value={endSessNote} onChange={e => setEndSessNote(e.target.value)} rows={2} placeholder="Remarques..." />
+              </div>
+              <div className="form-row">
+                <label>Ajouter au stock ?</label>
+                <div className="radio-group">
+                  <label><input type="radio" value="no" checked={stockAction === "no"} onChange={() => setStockAction("no")} /> Non</label>
+                  <label><input type="radio" value="yes" checked={stockAction === "yes"} onChange={() => setStockAction("yes")} /> Oui</label>
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button className="btn btn-outline" onClick={() => setShowEndModal(false)}>Annuler</button>
+                <button className="btn btn-primary" onClick={endSession}>✓ Terminer et sauvegarder</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── SESSION SUMMARY ──────────────────────────────────────────── */}
+      {showSessionSummary && (
+        <div className="modal-overlay">
+          <div className="modal modal-lg">
+            <div className="modal-header">
+              <h3>✅ Session terminée</h3>
+            </div>
+            <div className="modal-body">
+              <div className="summary-stats">
+                <div className="stat-box stat-green"><span>{totalScanned}</span><small>Total scanné</small></div>
+                <div className="stat-box stat-red"><span>{totalDefective}</span><small>Défectueux</small></div>
+                <div className="stat-box stat-green"><span>{totalScanned - totalDefective}</span><small>Conformes</small></div>
+              </div>
+              <p className="muted mt-sm">La session a été sauvegardée. Consultez l'onglet Sessions pour les détails.</p>
+              <div className="modal-footer">
+                <button className="btn btn-primary" onClick={handleCloseSummary}>✓ Fermer</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── DELETE SESSION CONFIRM ───────────────────────────────────── */}
+      {showDeleteModal && (
+        <div className="modal-overlay">
+          <div className="modal modal-sm">
+            <div className="modal-header"><h3>Annuler la session ?</h3></div>
+            <div className="modal-body">
+              <p>Tous les scans de la session en cours seront perdus.</p>
+              <div className="modal-footer">
+                <button className="btn btn-outline" onClick={() => setShowDeleteModal(false)}>Annuler</button>
+                <button className="btn btn-danger" onClick={() => {
+                  setCurrentSession(null); setSessionScans({}); setScanLog([]); setDefectiveInSession([]); setLastScanSku(""); setShowDeleteModal(false);
+                }}>🗑 Supprimer</button>
+              </div>
             </div>
           </div>
         </div>

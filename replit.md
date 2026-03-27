@@ -91,6 +91,29 @@ Generated Zod schemas from the OpenAPI spec (e.g. `HealthCheckResponse`). Used b
 
 Generated React Query hooks and fetch client from the OpenAPI spec (e.g. `useHealthCheck`, `healthCheck`).
 
+### `artifacts/stockcheck` (`@workspace/stockcheck`)
+
+French-language stock control web app for a fashion/clothing business. Built with React + Vite.
+
+**Pages:**
+- **Scanner** — barcode scan sessions, packing list, live tracking table with separate écart+/écart- variance, defective item marking
+- **Sessions** — history, CSV/Excel export per session (exceljs), defective items breakdown
+- **Défectueux** — registry of all defective items, filterable, Excel export
+- **Catalogue** — SKU-based article management with category/size/color
+- **Stock (réf.)** — reference stock view
+- **Paramètres** — Shopify integration settings
+
+**Features added v2:**
+- Packing list: prominent banner, reset with confirmation, active packing list warning on session start
+- Variance: ecart positif (surplus, green) and ecart négatif (manquant, red) displayed separately
+- Defective products: "Marquer comme défectueux" button after each scan, defect type + note + image URL prompt, saved to dedicated DB table
+- Defective registry: dedicated page with Excel export
+- Returns module: "Retour (packing)" and "Retour libre" modes
+- Shopify integration: OAuth-ready, stock adjustment on conforming scan, webhook registration infrastructure
+- Mobile-first responsive design with hamburger menu
+
+**DB tables:** `catalogue`, `sessions`, `app_state`, `defective_items`, `settings`
+
 ### `scripts` (`@workspace/scripts`)
 
 Utility scripts package. Each script is a `.ts` file in `src/` with a corresponding npm script in `package.json`. Run scripts via `pnpm --filter @workspace/scripts run <script>`. Scripts can import any workspace package (e.g., `@workspace/db`) by adding it as a dependency in `scripts/package.json`.
