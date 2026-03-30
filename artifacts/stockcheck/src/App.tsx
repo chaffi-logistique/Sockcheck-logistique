@@ -7,10 +7,15 @@ import Catalogue from "./pages/Catalogue";
 import Stock from "./pages/Stock";
 import Defective from "./pages/Defective";
 import Settings from "./pages/Settings";
+import Login from "./pages/Login";
+
+const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+const SESSION_KEY = "sc_auth_token";
 
 type Page = "scan" | "sessions" | "catalogue" | "stock" | "defective" | "settings";
 
 export default function App() {
+  const [authState, setAuthState] = useState<"loading" | "required" | "ok">("loading");
   const [page, setPage] = useState<Page>("scan");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [catalogue, setCatalogue] = useState<Article[]>([]);
@@ -25,7 +30,48 @@ export default function App() {
     defectiveInSession: [] as DefectiveItem[],
   });
 
+  // Check auth on startup
   useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch(`${BASE}/api/auth/status`);
+        const { required } = await r.json();
+        if (!required) {
+          setAuthState("ok");
+          return;
+        }
+        // Auth is required — check stored token
+        const token = sessionStorage.getItem(SESSION_KEY);
+        if (token) {
+          const vr = await fetch(`${BASE}/api/auth/validate`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token }),
+          });
+          const { valid } = await vr.json();
+          if (valid) { setAuthState("ok"); return; }
+        }
+        setAuthState("required");
+      } catch {
+        // If server unreachable, don't block the app
+        setAuthState("ok");
+      }
+    })();
+  }, []);
+
+  const handleAuth = (token: string) => {
+    sessionStorage.setItem(SESSION_KEY, token);
+    setAuthState("ok");
+  };
+
+  const handleLogout = () => {
+    sessionStorage.removeItem(SESSION_KEY);
+    setAuthState("required");
+  };
+
+  // Load app data after auth
+  useEffect(() => {
+    if (authState !== "ok") return;
     (async () => {
       try {
         const [catalogueData, sessionsData, appState] = await Promise.all([
@@ -49,23 +95,18 @@ export default function App() {
         setSaveStatus("saved");
       }
     })();
-  }, []);
+  }, [authState]);
 
   const markUnsaved = useCallback(() => setSaveStatus("unsaved"), []);
   const markSaved = useCallback(() => setSaveStatus("saved"), []);
-
-  const handleStateChange = useCallback((state: typeof savedState) => {
-    setSavedState(state);
-  }, []);
+  const handleStateChange = useCallback((state: typeof savedState) => { setSavedState(state); }, []);
 
   const saveManual = async () => {
     try {
       await api.saveState(savedState);
       setSaveStatus("saved");
       alert("✓ Données sauvegardées avec succès.");
-    } catch (e) {
-      console.error("Save error", e);
-    }
+    } catch (e) { console.error("Save error", e); }
   };
 
   useEffect(() => {
@@ -77,6 +118,20 @@ export default function App() {
     return () => clearInterval(interval);
   }, [saveStatus, savedState, markSaved]);
 
+  // ── AUTH SCREENS ──────────────────────────────────────────────────────
+  if (authState === "loading") {
+    return (
+      <div style={{ height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#1e3a8a" }}>
+        <div style={{ color: "rgba(255,255,255,.6)", fontSize: 15 }}>Chargement...</div>
+      </div>
+    );
+  }
+
+  if (authState === "required") {
+    return <Login onAuth={handleAuth} />;
+  }
+
+  // ── MAIN APP ──────────────────────────────────────────────────────────
   const navItems: { id: Page; label: string }[] = [
     { id: "scan", label: "Scanner" },
     { id: "sessions", label: "Sessions" },
@@ -103,9 +158,11 @@ export default function App() {
             <span>{saveStatus === "loading" ? "Chargement..." : saveStatus === "unsaved" ? "Non sauvegardé" : "Sauvegardé"}</span>
           </div>
           <button className="btn btn-outline btn-sm" onClick={saveManual}>💾 Sauvegarder</button>
+          <button className="btn btn-outline btn-sm" title="Se déconnecter" onClick={handleLogout} style={{ color: "var(--muted)" }}>🔒</button>
         </div>
         <button className="mobile-menu-btn" onClick={() => setMobileMenuOpen(!mobileMenuOpen)}>☰</button>
       </nav>
+
       {mobileMenuOpen && (
         <div className="mobile-nav-overlay" onClick={() => setMobileMenuOpen(false)}>
           <div className="mobile-nav-panel" onClick={e => e.stopPropagation()}>
@@ -115,6 +172,9 @@ export default function App() {
                 {n.label}
               </button>
             ))}
+            <button className="mobile-nav-item" style={{ color: "var(--red)", borderTop: "1px solid var(--border)", marginTop: "auto" }} onClick={handleLogout}>
+              🔒 Se déconnecter
+            </button>
           </div>
         </div>
       )}
@@ -131,9 +191,7 @@ export default function App() {
             markSaved={markSaved}
           />
         )}
-        {page === "sessions" && (
-          <Sessions sessions={sessions} setSessions={setSessions} catalogue={catalogue} />
-        )}
+        {page === "sessions" && <Sessions sessions={sessions} setSessions={setSessions} catalogue={catalogue} />}
         {page === "defective" && <Defective />}
         {page === "catalogue" && <Catalogue catalogue={catalogue} setCatalogue={setCatalogue} />}
         {page === "stock" && <Stock catalogue={catalogue} />}
