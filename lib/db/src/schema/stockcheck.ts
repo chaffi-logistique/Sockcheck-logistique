@@ -1,4 +1,4 @@
-import { pgTable, text, serial, integer, boolean, timestamp, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, boolean, timestamp, jsonb, doublePrecision } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -10,6 +10,7 @@ export const catalogueTable = pgTable("catalogue", {
   taille: text("taille").notNull(),
   couleur: text("couleur").notNull().default(""),
   stockInitial: integer("stock_initial").notNull().default(0),
+  prix: doublePrecision("prix").default(0),
 });
 
 export const insertCatalogueSchema = createInsertSchema(catalogueTable).omit({ id: true });

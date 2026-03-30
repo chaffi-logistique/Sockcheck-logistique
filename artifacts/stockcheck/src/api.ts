@@ -39,4 +39,7 @@ export const api = {
 
   adjustShopifyStock: (sku: string, delta: number) =>
     apiFetch(`${BASE}/api/shopify/adjust-stock`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sku, delta }) }),
+
+  importShopify: (items: object[]): Promise<{ imported: number; updated: number; skipped: number }> =>
+    apiFetch(`${BASE}/api/catalogue/import-shopify`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(items) }),
 };

@@ -16,7 +16,7 @@ router.get("/catalogue", async (req: Request, res: Response) => {
     const rows = await db.select().from(catalogueTable);
     res.json(rows.map(r => ({
       sku: r.sku, nom: r.nom, cat: r.cat, taille: r.taille,
-      couleur: r.couleur, stock_initial: r.stockInitial,
+      couleur: r.couleur, stock_initial: r.stockInitial, prix: r.prix ?? 0,
     })));
   } catch (e) {
     req.log.error(e, "Error fetching catalogue");
@@ -26,13 +26,59 @@ router.get("/catalogue", async (req: Request, res: Response) => {
 
 router.post("/catalogue", async (req: Request, res: Response) => {
   try {
-    const { sku, nom, cat, taille, couleur = "", stock_initial = 0 } = req.body;
+    const { sku, nom, cat, taille, couleur = "", stock_initial = 0, prix = 0 } = req.body;
     if (!sku || !nom || !cat) { res.status(400).json({ error: "sku, nom, cat requis" }); return; }
-    await db.insert(catalogueTable).values({ sku, nom, cat, taille, couleur, stockInitial: stock_initial });
+    await db.insert(catalogueTable).values({ sku, nom, cat, taille, couleur, stockInitial: stock_initial, prix });
     res.json({ success: true });
   } catch (e: any) {
     if (e.code === "23505") { res.status(409).json({ error: "SKU déjà existant" }); return; }
     req.log.error(e, "Error inserting catalogue");
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ── SHOPIFY CSV IMPORT ─────────────────────────────────────────
+// Upsert logic: update stock+prix if SKU exists, insert if not, never delete
+router.post("/catalogue/import-shopify", async (req: Request, res: Response) => {
+  try {
+    const items: Array<{ sku: string; nom: string; cat: string; taille: string; couleur: string; stock_initial: number; prix: number }> = req.body;
+    if (!Array.isArray(items) || items.length === 0) {
+      res.status(400).json({ error: "Tableau d'articles requis" }); return;
+    }
+
+    // Fetch existing SKUs once
+    const existing = await db.select({ sku: catalogueTable.sku }).from(catalogueTable);
+    const existingSkus = new Set(existing.map(r => r.sku));
+
+    let imported = 0, updated = 0, skipped = 0;
+
+    for (const item of items) {
+      if (!item.sku) { skipped++; continue; }
+      if (existingSkus.has(item.sku)) {
+        // Update stock and price only — never change name/cat/taille/couleur
+        await db.update(catalogueTable)
+          .set({ stockInitial: item.stock_initial, prix: item.prix })
+          .where(eq(catalogueTable.sku, item.sku));
+        updated++;
+      } else {
+        try {
+          await db.insert(catalogueTable).values({
+            sku: item.sku, nom: item.nom, cat: item.cat,
+            taille: item.taille, couleur: item.couleur,
+            stockInitial: item.stock_initial, prix: item.prix,
+          });
+          imported++;
+          existingSkus.add(item.sku);
+        } catch (e: any) {
+          if (e.code === "23505") { updated++; } // race condition: already exists
+          else { skipped++; }
+        }
+      }
+    }
+
+    res.json({ success: true, imported, updated, skipped });
+  } catch (e) {
+    req.log.error(e, "Error importing Shopify catalogue");
     res.status(500).json({ error: "Internal server error" });
   }
 });
