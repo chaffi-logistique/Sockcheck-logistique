@@ -1,0 +1,1085 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stock-Logistique</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+:root {
+  --bg: #f4f5f7; --surface: #ffffff; --surface2: #f1f3f5; --surface3: #e9ecef;
+  --border: #dee2e6; --border2: #ced4da;
+  --text: #1a1d23; --text2: #495057; --muted: #868e96;
+  --acc: #2563eb; --acc-light: #eff6ff; --acc-dark: #1d4ed8;
+  --green: #16a34a; --green-light: #f0fdf4; --green-border: #86efac;
+  --red: #dc2626; --red-light: #fef2f2; --red-border: #fca5a5;
+  --orange: #ea580c; --orange-light: #fff7ed; --orange-border: #fdba74;
+  --yellow: #ca8a04; --yellow-light: #fefce8;
+  --purple: #7c3aed; --purple-light: #f5f3ff;
+  --mono: "JetBrains Mono", monospace; --sans: "Inter", sans-serif;
+  --radius: 8px; --radius-lg: 12px;
+  --shadow: 0 1px 3px rgba(0,0,0,.08);
+  --shadow-md: 0 4px 12px rgba(0,0,0,.1);
+}
+*,*::before,*::after { box-sizing: border-box; margin: 0; padding: 0; }
+html,body { height: 100%; font-family: var(--sans); background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5; }
+body { display: flex; flex-direction: column; overflow: hidden; }
+#app { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 4px; }
+
+/* ── PIN ── */
+.pin-screen { position: fixed; inset: 0; background: var(--bg); display: flex; align-items: center; justify-content: center; z-index: 999; }
+.pin-box { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 48px 40px; width: 360px; text-align: center; box-shadow: var(--shadow-md); }
+.pin-logo { font-size: 28px; font-weight: 700; color: var(--acc); margin-bottom: 4px; letter-spacing: -.5px; }
+.pin-sub { font-size: 13px; color: var(--muted); margin-bottom: 28px; }
+.pin-input { font-size: 28px; letter-spacing: 10px; text-align: center; font-family: var(--mono); font-weight: 700; border: 2px solid var(--border2); border-radius: 10px; padding: 12px; }
+.pin-input:focus { border-color: var(--acc); outline: none; box-shadow: 0 0 0 3px #2563eb1a; }
+.pin-error { color: var(--red); font-size: 13px; margin-top: 10px; font-weight: 500; }
+.pin-btn { margin-top: 16px; width: 100%; padding: 12px; background: var(--acc); color: #fff; border: none; border-radius: var(--radius); font-size: 15px; font-weight: 600; cursor: pointer; font-family: var(--sans); transition: .15s; }
+.pin-btn:hover { background: var(--acc-dark); }
+
+/* ── NAV ── */
+.nav { background: var(--surface); border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 20px; height: 52px; flex-shrink: 0; gap: 4px; z-index: 50; }
+.nav-brand { font-weight: 700; font-size: 15px; color: var(--acc); margin-right: 16px; letter-spacing: -.3px; white-space: nowrap; display: flex; align-items: center; gap: 8px; }
+.nav-brand-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--acc); }
+.ntab { padding: 6px 14px; border: none; background: transparent; color: var(--muted); font-family: var(--sans); font-size: 13px; font-weight: 500; cursor: pointer; border-radius: var(--radius); transition: .15s; white-space: nowrap; }
+.ntab:hover { background: var(--surface2); color: var(--text); }
+.ntab.active { background: var(--acc-light); color: var(--acc); font-weight: 600; }
+.nav-right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+.session-pill { background: var(--green-light); border: 1px solid var(--green-border); color: var(--green); border-radius: 20px; padding: 3px 10px; font-size: 11px; font-weight: 600; display: flex; align-items: center; gap: 5px; }
+.session-pill-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: pulse 1.5s infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+/* ── BUTTONS ── */
+.btn { padding: 8px 16px; border-radius: var(--radius); border: 1px solid transparent; font-family: var(--sans); font-size: 13px; font-weight: 500; cursor: pointer; transition: .15s; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; min-height: 34px; }
+.btn-primary { background: var(--acc); color: #fff; border-color: var(--acc); }
+.btn-primary:hover { background: var(--acc-dark); }
+.btn-primary:disabled { opacity: .4; cursor: not-allowed; }
+.btn-outline { background: var(--surface); color: var(--text2); border-color: var(--border2); }
+.btn-outline:hover { border-color: var(--acc); color: var(--acc); }
+.btn-danger { background: var(--surface); color: var(--red); border-color: var(--red-border); }
+.btn-danger:hover { background: var(--red-light); }
+.btn-success { background: var(--green); color: #fff; border-color: var(--green); }
+.btn-success:hover { opacity: .9; }
+.btn-warn { background: var(--orange); color: #fff; border-color: var(--orange); }
+.btn-warn:hover { opacity: .9; }
+.btn-ghost { background: transparent; border-color: transparent; color: var(--muted); }
+.btn-ghost:hover { background: var(--surface2); color: var(--text); }
+.btn-sm { padding: 4px 10px; font-size: 12px; min-height: 28px; }
+.btn-lg { padding: 11px 20px; font-size: 14px; min-height: 42px; }
+.btn-red-solid { background: var(--red); color: #fff; border-color: var(--red); }
+.btn-red-solid:hover { opacity: .9; }
+
+/* ── INPUTS ── */
+input[type=text],input[type=number],input[type=password],select,textarea {
+  background: var(--surface); border: 1px solid var(--border2); color: var(--text);
+  padding: 7px 10px; border-radius: var(--radius); font-family: var(--sans);
+  font-size: 13px; outline: none; transition: .15s; width: 100%; min-height: 34px;
+}
+input:focus,select:focus,textarea:focus { border-color: var(--acc); box-shadow: 0 0 0 3px #2563eb1a; }
+label { font-size: 11px; font-weight: 600; color: var(--muted); display: block; margin-bottom: 4px; text-transform: uppercase; letter-spacing: .4px; }
+.form-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 14px; }
+
+/* ── SCANNER PAGE ── */
+.scanner-wrap { display: flex; flex: 1; overflow: hidden; }
+.scanner-sidebar { width: 260px; flex-shrink: 0; border-right: 1px solid var(--border); background: var(--surface); display: flex; flex-direction: column; overflow-y: auto; }
+.scanner-main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+/* Sidebar sections */
+.sb-section { padding: 16px; border-bottom: 1px solid var(--border); }
+.sb-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin-bottom: 10px; }
+.mode-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.mode-btn { padding: 10px 8px; border: 1.5px solid var(--border2); border-radius: var(--radius); background: var(--surface2); cursor: pointer; font-family: var(--sans); font-size: 12px; font-weight: 500; text-align: center; transition: .15s; color: var(--text2); line-height: 1.3; }
+.mode-btn:hover { border-color: var(--acc); color: var(--acc); background: var(--acc-light); }
+.mode-btn.active { border-color: var(--acc); color: var(--acc); background: var(--acc-light); font-weight: 600; }
+.mode-btn .mode-icon { font-size: 16px; display: block; margin-bottom: 3px; }
+.mode-btn .mode-sub { font-size: 10px; color: var(--muted); margin-top: 1px; }
+.mode-btn.active .mode-sub { color: var(--acc); opacity: .7; }
+
+.packing-summary { background: var(--acc-light); border: 1px solid #93c5fd; border-radius: var(--radius); padding: 10px 12px; font-size: 12px; color: var(--acc); margin-bottom: 8px; }
+.packing-summary strong { display: block; font-size: 13px; margin-bottom: 2px; }
+.packing-actions { display: flex; gap: 6px; }
+
+.scan-zone { background: var(--acc-light); border: 2px solid var(--acc); border-radius: var(--radius); padding: 12px; margin-bottom: 0; }
+.scan-zone-label { font-size: 10px; font-weight: 700; color: var(--acc); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 6px; }
+.scan-input { font-size: 14px; padding: 10px 12px; font-family: var(--mono); border-color: var(--acc); background: #fff; }
+.scan-input:focus { border-color: var(--acc-dark); box-shadow: 0 0 0 3px #2563eb20; }
+.scan-feedback { margin-top: 8px; font-size: 12px; font-weight: 500; padding: 6px 10px; border-radius: 6px; display: none; }
+.scan-feedback.ok { display: block; background: var(--green-light); color: var(--green); border: 1px solid var(--green-border); }
+.scan-feedback.err { display: block; background: var(--red-light); color: var(--red); border: 1px solid var(--red-border); }
+.scan-feedback.warn { display: block; background: var(--yellow-light); color: var(--yellow); border: 1px solid #fde68a; }
+
+.counters { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.counter-box { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 6px; text-align: center; }
+.counter-val { font-size: 22px; font-weight: 700; line-height: 1; }
+.counter-lbl { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .3px; margin-top: 2px; }
+.counter-box.green { background: var(--green-light); border-color: var(--green-border); }
+.counter-box.green .counter-val { color: var(--green); }
+.counter-box.red { background: var(--red-light); border-color: var(--red-border); }
+.counter-box.red .counter-val { color: var(--red); }
+
+/* Session name input */
+.session-name-input { font-size: 13px; font-weight: 500; }
+
+/* Main area top bar */
+.main-topbar { padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--surface); display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; flex-wrap: wrap; gap: 8px; }
+.session-info { font-size: 13px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.session-info-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); animation: pulse 1.5s infinite; }
+.filter-tabs { display: flex; gap: 2px; }
+.filter-tab { padding: 4px 12px; border: 1px solid var(--border2); border-radius: 20px; font-size: 12px; font-weight: 500; cursor: pointer; background: var(--surface); color: var(--muted); transition: .15s; }
+.filter-tab:hover { border-color: var(--acc); color: var(--acc); }
+.filter-tab.active { background: var(--acc); color: #fff; border-color: var(--acc); }
+
+/* Scan table */
+.scan-table-wrap { flex: 1; overflow-y: auto; }
+.scan-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.scan-table th { background: var(--surface2); padding: 9px 14px; text-align: left; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 5; white-space: nowrap; }
+.scan-table td { padding: 10px 14px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.scan-table tr:hover td { background: var(--surface2); }
+.scan-table tr:last-child td { border-bottom: none; }
+.progress-bar-wrap { width: 160px; background: var(--surface3); border-radius: 4px; height: 6px; overflow: hidden; }
+.progress-bar-fill { height: 100%; border-radius: 4px; transition: width .3s; }
+.progress-bar-fill.ok { background: var(--green); }
+.progress-bar-fill.over { background: var(--orange); }
+.progress-bar-fill.missing { background: var(--red); }
+.progress-bar-fill.neutral { background: var(--acc); }
+.ecart-badge { font-family: var(--mono); font-weight: 700; font-size: 12px; display: flex; align-items: center; gap: 3px; }
+.ecart-pos { color: var(--orange); }
+.ecart-neg { color: var(--red); }
+.ecart-ok { color: var(--green); }
+.sku-badge { font-family: var(--mono); font-size: 11px; background: var(--surface2); border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; color: var(--text2); }
+.taille-link { color: var(--acc); font-weight: 600; font-size: 12px; cursor: default; }
+.cat-badge { background: var(--surface2); border: 1px solid var(--border); border-radius: 20px; padding: 2px 8px; font-size: 11px; color: var(--text2); }
+
+/* History */
+.history-item { display: flex; align-items: center; gap: 8px; padding: 6px 16px; border-bottom: 1px solid var(--border); font-size: 12px; color: var(--text2); }
+.history-item:last-child { border-bottom: none; }
+.history-sku { font-family: var(--mono); font-size: 11px; color: var(--muted); flex: 1; }
+.history-time { font-size: 11px; color: var(--muted); white-space: nowrap; }
+
+/* ── MODAL ── */
+.modal-overlay { position: fixed; inset: 0; background: #00000070; z-index: 200; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(3px); padding: 20px; }
+.modal { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); width: 560px; max-width: 100%; max-height: 90vh; display: flex; flex-direction: column; box-shadow: var(--shadow-md); overflow: hidden; }
+.modal-sm { width: 380px; }
+.modal-lg { width: 720px; }
+.modal-hd { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
+.modal-hd h3 { font-size: 15px; font-weight: 600; }
+.modal-close { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 20px; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 6px; transition: .15s; }
+.modal-close:hover { background: var(--surface2); color: var(--text); }
+.modal-body { overflow-y: auto; padding: 20px; flex: 1; }
+.modal-ft { display: flex; gap: 8px; justify-content: flex-end; padding: 14px 20px; border-top: 1px solid var(--border); flex-shrink: 0; }
+
+/* ── GENERAL PAGE ── */
+.page { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
+.page-hd { padding: 14px 20px; background: var(--surface); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; flex-wrap: wrap; gap: 10px; }
+.page-hd h2 { font-size: 15px; font-weight: 700; }
+.page-body { flex: 1; overflow-y: auto; }
+
+/* ── TABLES ── */
+.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+.tbl th { background: var(--surface2); padding: 9px 14px; text-align: left; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 5; }
+.tbl td { padding: 9px 14px; border-bottom: 1px solid var(--border); vertical-align: middle; color: var(--text2); }
+.tbl tr:hover td { background: var(--surface2); }
+.tbl tr:last-child td { border-bottom: none; }
+
+/* Badges */
+.badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 500; }
+.badge-blue { background: var(--acc-light); color: var(--acc); }
+.badge-green { background: var(--green-light); color: var(--green); border: 1px solid var(--green-border); }
+.badge-red { background: var(--red-light); color: var(--red); border: 1px solid var(--red-border); }
+.badge-orange { background: var(--orange-light); color: var(--orange); border: 1px solid var(--orange-border); }
+.badge-gray { background: var(--surface2); color: var(--muted); border: 1px solid var(--border); }
+
+/* Defect types */
+.defect-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 4px 0 16px; }
+.defect-btn { padding: 9px 6px; border: 1.5px solid var(--border2); border-radius: var(--radius); background: var(--surface2); cursor: pointer; font-size: 12px; font-family: var(--sans); font-weight: 500; text-align: center; transition: .15s; }
+.defect-btn:hover { border-color: var(--orange); color: var(--orange); }
+.defect-btn.sel { background: var(--orange-light); border-color: var(--orange); color: var(--orange); }
+
+/* Session cards */
+.sess-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); margin-bottom: 10px; overflow: hidden; box-shadow: var(--shadow); }
+.sess-card-hd { display: flex; align-items: center; gap: 12px; padding: 14px 16px; cursor: pointer; transition: .15s; flex-wrap: wrap; }
+.sess-card-hd:hover { background: var(--surface2); }
+.sess-card-name { font-weight: 600; font-size: 14px; flex: 1; }
+.sess-card-bd { border-top: 1px solid var(--border); padding: 16px; }
+
+/* Alert */
+.alert { padding: 10px 14px; border-radius: var(--radius); font-size: 13px; margin-bottom: 12px; }
+.alert-warn { background: var(--yellow-light); border: 1px solid #fde68a; color: var(--yellow); }
+.alert-info { background: var(--acc-light); border: 1px solid #93c5fd; color: var(--acc); }
+.alert-danger { background: var(--red-light); border: 1px solid var(--red-border); color: var(--red); }
+
+/* Empty */
+.empty { text-align: center; padding: 4rem 2rem; color: var(--muted); }
+.empty-icon { font-size: 36px; margin-bottom: 12px; }
+.empty-text { font-size: 14px; }
+
+/* Misc */
+.img-thumb { width: 36px; height: 36px; object-fit: cover; border-radius: 6px; border: 1px solid var(--border); }
+.img-placeholder { width: 36px; height: 36px; background: var(--surface2); border-radius: 6px; border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; font-size: 16px; color: var(--muted); }
+.loading { display: flex; align-items: center; justify-content: center; padding: 3rem; color: var(--muted); gap: 10px; }
+.spinner { width: 18px; height: 18px; border: 2px solid var(--border2); border-top-color: var(--acc); border-radius: 50%; animation: spin .6s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.divider { height: 1px; background: var(--border); margin: 12px 0; }
+
+@media (max-width: 768px) {
+  .scanner-sidebar { width: 100%; border-right: none; border-bottom: 1px solid var(--border); max-height: 50vh; }
+  .scanner-wrap { flex-direction: column; }
+}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+const SUPABASE_URL = 'https://vmpcpuexszmlalezheep.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_3cIIsB3hvU4fEnT1WrUShQ_V4-xV0Eo';
+const PIN = '130801';
+const APP_NAME = 'Stock-Logistique';
+const DEFECT_TYPES = ['Tâche','Couture','Déchirure','Trou','Fabrication','Autre'];
+const MODES = [
+  { id: 'reception', icon: '📥', label: 'Réception', sub: 'Stock entrant' },
+  { id: 'retour', icon: '↩️', label: 'Retour Shop', sub: 'Magasin partenaire' },
+  { id: 'test', icon: '🧪', label: 'Test', sub: 'Sans impact stock' },
+  { id: 'inventaire', icon: '🔍', label: 'Inventaire', sub: 'Comptage seul' },
+];
+
+const { createClient } = supabase;
+const db = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// ── STATE ──────────────────────────────────────────────────────────────────
+let S = {
+  authed: sessionStorage.getItem('sl_auth') === '1',
+  pinError: false,
+  page: 'scanner',
+
+  // Scanner session
+  session: null,       // objet session en cours
+  mode: 'reception',
+  sessionName: '',
+  scans: [],           // [{ sku, nom, cat, taille, qty_pos, qty_neg, attendu }]
+  history: [],         // [{ sku, nom, delta, time }]
+  packingList: null,   // null ou [{ sku, nom, cat, taille, attendu }]
+  filter: 'tous',
+  scanInput: '',
+  scanFeedback: null,
+
+  // Data
+  catalogue: [],
+  sessions: [],
+  defectueux: [],
+
+  // Modals
+  mNewSession: false,
+  mPacking: false,
+  mDefect: null,
+  mAddProd: false,
+  mCsv: false,
+
+  // UI
+  expandedSession: null,
+  searchCat: '',
+  searchSess: '',
+  loadingSess: false,
+  loadingDef: false,
+};
+
+function set(patch) { Object.assign(S, patch); render(); }
+
+// ── DB ─────────────────────────────────────────────────────────────────────
+async function loadCatalogue() {
+  const { data } = await db.from('catalogue').select('*').order('nom');
+  set({ catalogue: data || [] });
+}
+async function loadSessions() {
+  set({ loadingSess: true });
+  const { data } = await db.from('sessions').select('*, scans(*)').order('created_at', { ascending: false });
+  set({ sessions: data || [], loadingSess: false });
+}
+async function loadDefectueux() {
+  set({ loadingDef: true });
+  const { data } = await db.from('defectueux').select('*').order('created_at', { ascending: false });
+  set({ defectueux: data || [], loadingDef: false });
+}
+
+async function dbStartSession(nom, mode) {
+  const { data } = await db.from('sessions').insert({ nom, mode, status: 'active' }).select().single();
+  return data;
+}
+async function dbCloseSession(id) {
+  await db.from('sessions').update({ status: 'closed', closed_at: new Date().toISOString() }).eq('id', id);
+}
+async function dbUpsertScan(sessionId, sku, nom, qtyPos, qtyNeg) {
+  const existing = S.scans.find(s => s.sku === sku);
+  if (existing && existing._dbId) {
+    await db.from('scans').update({ qty_pos: qtyPos, qty_neg: qtyNeg }).eq('id', existing._dbId);
+  } else {
+    const { data } = await db.from('scans').insert({ session_id: sessionId, sku, nom, qty_pos: qtyPos, qty_neg: qtyNeg }).select().single();
+    if (data && existing) existing._dbId = data.id;
+  }
+}
+async function dbSaveDefect(sku, nom, type, note, sessionId) {
+  await db.from('defectueux').insert({ sku, nom, type_defaut: type, note, session_id: sessionId || null });
+}
+async function dbAddProduct(sku, nom, cat, taille, imageUrl) {
+  const { error } = await db.from('catalogue').insert({ sku, nom, categorie: cat, taille, image_url: imageUrl });
+  return !error;
+}
+
+// ── SCAN LOGIC ─────────────────────────────────────────────────────────────
+function doScan(rawSku, delta = 1) {
+  if (!S.session) {
+    set({ scanFeedback: { type: 'err', msg: 'Aucune session active — démarrez une session d\'abord' } });
+    clearFeedback(); return;
+  }
+  const sku = rawSku.trim().toUpperCase();
+  if (!sku) return;
+
+  const produit = S.catalogue.find(p => p.sku === sku);
+  const plItem = S.packingList?.find(p => p.sku === sku);
+  let feedbackType = 'ok';
+  let feedbackMsg = '';
+
+  // Mettre à jour scans
+  const existingScan = S.scans.find(s => s.sku === sku);
+  if (existingScan) {
+    if (delta > 0) existingScan.qty_pos = (existingScan.qty_pos || 0) + delta;
+    else existingScan.qty_neg = (existingScan.qty_neg || 0) + Math.abs(delta);
+    dbUpsertScan(S.session.id, sku, existingScan.nom, existingScan.qty_pos, existingScan.qty_neg);
+  } else {
+    const newScan = {
+      sku,
+      nom: produit?.nom || sku,
+      cat: produit?.categorie || '',
+      taille: produit?.taille || '',
+      qty_pos: delta > 0 ? delta : 0,
+      qty_neg: delta < 0 ? Math.abs(delta) : 0,
+      attendu: plItem?.attendu || 0,
+      _dbId: null,
+    };
+    S.scans.push(newScan);
+    dbUpsertScan(S.session.id, sku, newScan.nom, newScan.qty_pos, newScan.qty_neg);
+  }
+
+  // Feedback
+  const sc = S.scans.find(s => s.sku === sku);
+  if (!produit) {
+    feedbackType = 'warn';
+    feedbackMsg = `⚠ SKU inconnu : ${sku}`;
+  } else if (S.packingList && !plItem) {
+    feedbackType = 'warn';
+    feedbackMsg = `⚠ ${produit.nom} — hors packing list`;
+  } else {
+    feedbackMsg = `${delta > 0 ? '+' + delta : delta} × ${produit?.nom || sku}`;
+  }
+
+  // History
+  S.history.unshift({ sku, nom: produit?.nom || sku, delta, time: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) });
+  if (S.history.length > 50) S.history.pop();
+
+  set({ scans: [...S.scans], history: [...S.history], scanInput: '', scanFeedback: { type: feedbackType, msg: feedbackMsg } });
+  clearFeedback();
+}
+
+function undoLast() {
+  if (!S.history.length) return;
+  const last = S.history[0];
+  const sc = S.scans.find(s => s.sku === last.sku);
+  if (sc) {
+    if (last.delta > 0) sc.qty_pos = Math.max(0, (sc.qty_pos || 0) - last.delta);
+    else sc.qty_neg = Math.max(0, (sc.qty_neg || 0) - Math.abs(last.delta));
+    if (sc.qty_pos === 0 && sc.qty_neg === 0) S.scans = S.scans.filter(s => s.sku !== last.sku);
+    dbUpsertScan(S.session.id, sc.sku, sc.nom, sc.qty_pos, sc.qty_neg);
+  }
+  S.history.shift();
+  set({ scans: [...S.scans], history: [...S.history] });
+}
+
+let feedbackTimer = null;
+function clearFeedback() {
+  clearTimeout(feedbackTimer);
+  feedbackTimer = setTimeout(() => set({ scanFeedback: null }), 3000);
+}
+
+async function startSession() {
+  const nom = S.sessionName.trim() || `Session du ${new Date().toLocaleDateString('fr-FR')}`;
+  const data = await dbStartSession(nom, S.mode);
+  if (data) set({ session: data, scans: [], history: [], packingList: null, scanFeedback: null });
+}
+
+async function closeSession() {
+  if (!S.session) return;
+  if (!confirm('Clôturer cette session ?')) return;
+  await dbCloseSession(S.session.id);
+  set({ session: null, scans: [], history: [], packingList: null });
+  loadSessions();
+}
+
+// ── COMPUTED ───────────────────────────────────────────────────────────────
+function getFilteredScans() {
+  let rows = [...S.scans];
+  // Ajouter les lignes packing non scannées
+  if (S.packingList) {
+    S.packingList.forEach(pl => {
+      if (!rows.find(r => r.sku === pl.sku)) {
+        rows.push({ sku: pl.sku, nom: pl.nom, cat: pl.cat || '', taille: pl.taille || '', qty_pos: 0, qty_neg: 0, attendu: pl.attendu });
+      } else {
+        const r = rows.find(r => r.sku === pl.sku);
+        if (!r.attendu) r.attendu = pl.attendu;
+      }
+    });
+  }
+  if (S.filter === 'tous') return rows;
+  if (S.filter === 'conformes') return rows.filter(r => r.attendu && r.qty_pos === r.attendu && r.qty_neg === 0);
+  if (S.filter === 'manquants') return rows.filter(r => r.attendu && r.qty_pos < r.attendu);
+  if (S.filter === 'surplus') return rows.filter(r => r.attendu && r.qty_pos > r.attendu);
+  if (S.filter === 'inconnus') return rows.filter(r => !r.attendu && r.qty_pos > 0);
+  return rows;
+}
+
+function getCounters() {
+  const rows = S.scans;
+  const total = rows.reduce((a, r) => a + (r.qty_pos || 0), 0);
+  const conformes = S.packingList ? rows.filter(r => {
+    const pl = S.packingList.find(p => p.sku === r.sku);
+    return pl && r.qty_pos === pl.attendu;
+  }).length : 0;
+  const ecarts = S.packingList ? rows.filter(r => {
+    const pl = S.packingList.find(p => p.sku === r.sku);
+    return (pl && r.qty_pos !== pl.attendu) || (!pl && r.qty_pos > 0);
+  }).length : rows.filter(r => r.qty_neg > 0).length;
+  return { total, conformes, ecarts };
+}
+
+// ── EXPORT ─────────────────────────────────────────────────────────────────
+function exportExcel() {
+  const wb = XLSX.utils.book_new();
+  const sessRows = S.sessions.map(s => ({
+    'Nom': s.nom, 'Mode': s.mode, 'Statut': s.status,
+    'Date': new Date(s.created_at).toLocaleString('fr-FR'),
+    'Refs scannées': (s.scans || []).length,
+  }));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sessRows.length ? sessRows : [{}]), 'Sessions');
+  const scanRows = S.sessions.flatMap(s => (s.scans || []).map(sc => ({
+    'Session': s.nom, 'SKU': sc.sku, 'Produit': sc.nom,
+    'Entrées +': sc.qty_pos, 'Sorties -': sc.qty_neg, 'Écart net': (sc.qty_pos || 0) - (sc.qty_neg || 0),
+  })));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(scanRows.length ? scanRows : [{}]), 'Scans');
+  const defRows = S.defectueux.map(d => ({ 'SKU': d.sku, 'Produit': d.nom, 'Type': d.type_defaut, 'Note': d.note || '', 'Date': new Date(d.created_at).toLocaleString('fr-FR') }));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(defRows.length ? defRows : [{}]), 'Défectueux');
+  XLSX.writeFile(wb, `Stock-Logistique-${new Date().toISOString().split('T')[0]}.xlsx`);
+}
+
+// ── H HELPER ───────────────────────────────────────────────────────────────
+function h(tag, attrs = {}, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === 'class') el.className = v;
+    else if (k === 'html') el.innerHTML = v;
+    else if (k === 'style') el.style.cssText = v;
+    else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2).toLowerCase(), v);
+    else el.setAttribute(k, v);
+  }
+  for (const kid of kids.flat()) {
+    if (kid == null || kid === false) continue;
+    el.appendChild(typeof kid === 'string' || typeof kid === 'number' ? document.createTextNode(kid) : kid);
+  }
+  return el;
+}
+
+// ── PAGES ──────────────────────────────────────────────────────────────────
+function renderPin() {
+  return h('div', { class: 'pin-screen' },
+    h('div', { class: 'pin-box' },
+      h('div', { class: 'pin-logo' }, '🏭 ' + APP_NAME),
+      h('div', { class: 'pin-sub' }, 'Entrez votre code PIN pour accéder'),
+      h('input', {
+        class: 'pin-input', type: 'password', placeholder: '••••••', maxlength: '10', id: 'pinInput', autofocus: 'true',
+        onKeydown: e => { if (e.key === 'Enter') tryPin(); }
+      }),
+      S.pinError ? h('div', { class: 'pin-error' }, '❌ Code incorrect, réessayez') : null,
+      h('button', { class: 'pin-btn', onClick: tryPin }, 'Accéder →')
+    )
+  );
+}
+
+function tryPin() {
+  const val = document.getElementById('pinInput')?.value;
+  if (val === PIN) {
+    sessionStorage.setItem('sl_auth', '1');
+    set({ authed: true, pinError: false });
+    loadCatalogue(); loadSessions(); loadDefectueux();
+  } else set({ pinError: true });
+}
+
+function renderNav() {
+  const tabs = [
+    { id: 'scanner', label: '📷 Scanner' },
+    { id: 'sessions', label: '📁 Sessions' },
+    { id: 'defectueux', label: '⚠ Défectueux' },
+    { id: 'catalogue', label: '📚 Catalogue' },
+  ];
+  return h('nav', { class: 'nav' },
+    h('div', { class: 'nav-brand' }, h('div', { class: 'nav-brand-dot' }), APP_NAME),
+    ...tabs.map(t => h('button', {
+      class: 'ntab' + (S.page === t.id ? ' active' : ''),
+      onClick: () => {
+        set({ page: t.id });
+        if (t.id === 'sessions') loadSessions();
+        if (t.id === 'defectueux') loadDefectueux();
+        if (t.id === 'catalogue') loadCatalogue();
+      }
+    }, t.label)),
+    h('div', { class: 'nav-right' },
+      S.session ? h('div', { class: 'session-pill' }, h('div', { class: 'session-pill-dot' }), S.session.nom) : null,
+      h('button', { class: 'btn btn-ghost btn-sm', onClick: () => { sessionStorage.removeItem('sl_auth'); set({ authed: false }); } }, '🔒')
+    )
+  );
+}
+
+function renderScanner() {
+  const { session, mode, packingList, scans, history, scanFeedback, filter } = S;
+  const filteredRows = getFilteredScans();
+  const { total, conformes, ecarts } = getCounters();
+
+  // Packing list summary
+  const plSummary = packingList ? h('div', { class: 'sb-section' },
+    h('div', { class: 'sb-label' }, 'Packing List'),
+    h('div', { class: 'packing-summary' },
+      h('strong', {}, `${packingList.length} références · ${packingList.reduce((a, p) => a + (p.attendu || 1), 0)} articles attendus`),
+      'Active sur cette session'
+    ),
+    h('div', { class: 'packing-actions' },
+      h('button', { class: 'btn btn-outline btn-sm', style: 'flex:1', onClick: () => set({ mPacking: true }) }, '✏ Modifier'),
+      h('button', { class: 'btn btn-danger btn-sm', onClick: () => { if (confirm('Effacer la packing list ?')) set({ packingList: null }); } }, '✕ Reset')
+    )
+  ) : h('div', { class: 'sb-section' },
+    h('div', { class: 'sb-label' }, 'Packing List'),
+    h('button', { class: 'btn btn-outline', style: 'width:100%', onClick: () => set({ mPacking: true }) }, '📋 Définir une packing list')
+  );
+
+  const sidebar = h('div', { class: 'scanner-sidebar' },
+    // Mode
+    h('div', { class: 'sb-section' },
+      h('div', { class: 'sb-label' }, 'Mode de session'),
+      h('div', { class: 'mode-grid' },
+        ...MODES.map(m => h('button', {
+          class: 'mode-btn' + (mode === m.id ? ' active' : ''),
+          onClick: () => set({ mode: m.id })
+        }, h('span', { class: 'mode-icon' }, m.icon), m.label, h('span', { class: 'mode-sub' }, m.sub)))
+      )
+    ),
+    // Packing list
+    plSummary,
+    // Session
+    h('div', { class: 'sb-section' },
+      h('div', { class: 'sb-label' }, 'Session'),
+      h('div', { class: 'form-row' },
+        h('label', {}, 'Nom de la session'),
+        h('input', { class: 'session-name-input', type: 'text', placeholder: `Session du ${new Date().toLocaleDateString('fr-FR')}`, value: S.sessionName, onInput: e => S.sessionName = e.target.value, disabled: session ? 'true' : false })
+      ),
+      h('div', { style: 'display:flex;gap:8px' },
+        h('button', { class: 'btn btn-primary btn-lg', style: 'flex:1', onClick: startSession, disabled: session ? 'true' : false }, session ? '▶ En cours' : '▶ Démarrer'),
+        session ? h('button', { class: 'btn btn-red-solid btn-lg', onClick: closeSession }, '■ Terminer') : null
+      )
+    ),
+    // Zone de scan
+    session ? h('div', { class: 'sb-section' },
+      h('div', { class: 'scan-zone' },
+        h('div', { class: 'scan-zone-label' }, '→ Positionne le curseur ici — scanner avec la scanette'),
+        h('input', {
+          class: 'scan-input', type: 'text', placeholder: 'Scan ou SKU + Entrée', id: 'scanInput', value: S.scanInput,
+          onInput: e => S.scanInput = e.target.value,
+          onKeydown: e => { if (e.key === 'Enter') { doScan(S.scanInput); } }
+        }),
+        scanFeedback ? h('div', { class: `scan-feedback ${scanFeedback.type}` }, scanFeedback.msg) : h('div', { class: 'scan-feedback' })
+      )
+    ) : null,
+    // Counters
+    h('div', { class: 'sb-section' },
+      h('div', { class: 'counters' },
+        h('div', { class: 'counter-box' }, h('div', { class: 'counter-val' }, total), h('div', { class: 'counter-lbl' }, 'Total')),
+        h('div', { class: 'counter-box green' }, h('div', { class: 'counter-val' }, conformes), h('div', { class: 'counter-lbl' }, 'Conformes')),
+        h('div', { class: 'counter-box red' }, h('div', { class: 'counter-val' }, ecarts), h('div', { class: 'counter-lbl' }, 'Écarts')),
+      ),
+      session && history.length > 0 ? h('button', { class: 'btn btn-ghost btn-sm', style: 'margin-top:8px;width:100%', onClick: undoLast }, '↩ Annuler dernier scan') : null
+    ),
+    // Historique
+    h('div', { class: 'sb-section', style: 'flex:1;padding-bottom:0' },
+      h('div', { class: 'sb-label' }, 'Historique de scan'),
+      history.length === 0 ? h('div', { style: 'color:var(--muted);font-size:12px;padding:8px 0' }, 'Aucun scan') :
+      h('div', { style: 'max-height:200px;overflow-y:auto' },
+        ...history.slice(0, 20).map(hi => h('div', { class: 'history-item' },
+          h('span', { class: `badge ${hi.delta > 0 ? 'badge-green' : 'badge-red'}`, style: 'min-width:32px;justify-content:center' }, (hi.delta > 0 ? '+' : '') + hi.delta),
+          h('span', { class: 'history-sku' }, hi.nom || hi.sku),
+          h('span', { class: 'history-time' }, hi.time)
+        ))
+      )
+    )
+  );
+
+  // Filters
+  const filterLabels = [
+    { id: 'tous', label: 'Tous' }, { id: 'manquants', label: 'Manquants' },
+    { id: 'surplus', label: 'Surplus' }, { id: 'conformes', label: 'Conformes' },
+    { id: 'inconnus', label: 'Inconnus' }
+  ];
+
+  const mainTopbar = session ? h('div', { class: 'main-topbar' },
+    h('div', { class: 'session-info' },
+      h('div', { class: 'session-info-dot' }),
+      h('strong', {}, session.nom),
+      h('span', { class: 'badge badge-blue' }, MODES.find(m => m.id === session.mode)?.label || session.mode),
+      packingList ? h('span', { style: 'font-size:12px;color:var(--muted)' }, `· packing list ${packingList.length} réfs`) : null
+    ),
+    h('div', { class: 'filter-tabs' },
+      ...filterLabels.map(f => h('button', { class: 'filter-tab' + (filter === f.id ? ' active' : ''), onClick: () => set({ filter: f.id }) }, f.label))
+    )
+  ) : h('div', { class: 'main-topbar' },
+    h('span', { style: 'color:var(--muted);font-size:13px' }, 'Aucune session active — démarrez une session dans le panneau gauche')
+  );
+
+  // Table
+  const tableBody = filteredRows.length === 0 ?
+    h('tr', {}, h('td', { colspan: '8', style: 'text-align:center;padding:3rem;color:var(--muted)' }, session ? 'Aucun scan dans cette session' : 'Aucune session active')) :
+    h('tbody', {}, ...filteredRows.map(row => {
+      const net = (row.qty_pos || 0) - (row.qty_neg || 0);
+      const attendu = row.attendu || 0;
+      const pct = attendu ? Math.min(100, Math.round((row.qty_pos || 0) / attendu * 100)) : 0;
+      const ecart = attendu ? (row.qty_pos || 0) - attendu : net;
+      const barClass = attendu ? (row.qty_pos === attendu ? 'ok' : row.qty_pos > attendu ? 'over' : 'missing') : 'neutral';
+      const ecartClass = ecart === 0 ? 'ecart-ok' : ecart > 0 ? 'ecart-pos' : 'ecart-neg';
+      const ecartPrefix = ecart > 0 ? '▲ +' : ecart < 0 ? '▼ ' : '✓ ';
+      return h('tr', {},
+        h('td', {}, h('div', { style: 'display:flex;align-items:center;gap:8px' },
+          h('div', { class: 'img-placeholder' }, '📦'),
+          h('span', { style: 'font-weight:500;color:var(--text)' }, row.nom || row.sku)
+        )),
+        h('td', {}, h('span', { class: 'sku-badge' }, row.sku)),
+        h('td', {}, row.cat ? h('span', { class: 'cat-badge' }, row.cat) : h('span', { style: 'color:var(--muted)' }, '—')),
+        h('td', {}, row.taille ? h('span', { class: 'taille-link' }, row.taille) : h('span', { style: 'color:var(--muted)' }, '—')),
+        h('td', { style: 'text-align:center;font-family:var(--mono);font-weight:600' }, attendu || '—'),
+        h('td', { style: 'text-align:center' },
+          h('span', { style: `font-family:var(--mono);font-weight:700;font-size:14px;color:${(row.qty_pos||0)>0?'var(--text)':'var(--muted)'}` }, row.qty_pos || 0),
+          row.qty_neg > 0 ? h('span', { style: 'color:var(--red);font-size:11px;margin-left:4px' }, '-' + row.qty_neg) : null
+        ),
+        h('td', {},
+          attendu ? h('div', { style: 'display:flex;align-items:center;gap:8px' },
+            h('div', { class: 'progress-bar-wrap' }, h('div', { class: `progress-bar-fill ${barClass}`, style: `width:${pct}%` })),
+            h('span', { style: 'font-size:11px;color:var(--muted);min-width:30px' }, pct + '%')
+          ) : h('span', { style: 'color:var(--muted);font-size:12px' }, '—')
+        ),
+        h('td', {},
+          h('div', { class: `ecart-badge ${ecartClass}` }, ecartPrefix + Math.abs(ecart)),
+          h('button', {
+            class: 'btn btn-ghost btn-sm', style: 'margin-left:6px;font-size:11px',
+            onClick: () => set({ mDefect: { sku: row.sku, nom: row.nom || row.sku } })
+          }, '⚠')
+        )
+      );
+    }));
+
+  const mainContent = h('div', { class: 'scanner-main' },
+    mainTopbar,
+    h('div', { class: 'scan-table-wrap' },
+      h('table', { class: 'scan-table' },
+        h('thead', {}, h('tr', {},
+          h('th', {}, 'ARTICLE'), h('th', {}, 'SKU'), h('th', {}, 'CATÉGORIE'),
+          h('th', {}, 'TAILLE'), h('th', {}, 'ATTENDU'), h('th', {}, 'SCANNÉ'),
+          h('th', {}, 'PROGRESSION'), h('th', {}, 'ÉCART')
+        )),
+        Array.isArray(filteredRows) && filteredRows.length > 0 ? tableBody : h('tbody', {}, h('tr', {}, h('td', { colspan: '8', style: 'text-align:center;padding:3rem;color:var(--muted)' }, session ? 'Aucun scan dans cette session' : 'Aucune session active — démarrez une session')))
+      )
+    )
+  );
+
+  return h('div', { class: 'page' }, h('div', { class: 'scanner-wrap' }, sidebar, mainContent));
+}
+
+function renderSessions() {
+  const filtered = S.sessions.filter(s => !S.searchSess || s.nom.toLowerCase().includes(S.searchSess.toLowerCase()));
+  return h('div', { class: 'page' },
+    h('div', { class: 'page-hd' },
+      h('h2', {}, '📁 Sessions'),
+      h('div', { style: 'display:flex;gap:8px;align-items:center' },
+        h('input', { type: 'text', placeholder: 'Rechercher…', style: 'width:200px', value: S.searchSess, onInput: e => set({ searchSess: e.target.value }) }),
+        h('button', { class: 'btn btn-outline btn-sm', onClick: exportExcel }, '⬇ Export Excel')
+      )
+    ),
+    S.loadingSess ? h('div', { class: 'loading' }, h('div', { class: 'spinner' }), 'Chargement…') :
+    filtered.length === 0 ? h('div', { class: 'empty' }, h('div', { class: 'empty-icon' }, '📁'), h('div', { class: 'empty-text' }, 'Aucune session enregistrée')) :
+    h('div', { class: 'page-body', style: 'padding:16px 20px' },
+      ...filtered.map(s => {
+        const scans = s.scans || [];
+        const totalPos = scans.reduce((a, sc) => a + (sc.qty_pos || 0), 0);
+        const totalNeg = scans.reduce((a, sc) => a + (sc.qty_neg || 0), 0);
+        const expanded = S.expandedSession === s.id;
+        return h('div', { class: 'sess-card' },
+          h('div', { class: 'sess-card-hd', onClick: () => set({ expandedSession: expanded ? null : s.id }) },
+            h('div', { style: 'flex:1' },
+              h('div', { class: 'sess-card-name' }, s.nom),
+              h('div', { style: 'display:flex;gap:6px;align-items:center;margin-top:4px;flex-wrap:wrap' },
+                h('span', { class: `badge ${s.status === 'active' ? 'badge-green' : 'badge-gray'}` }, s.status === 'active' ? '● Actif' : 'Clôturé'),
+                h('span', { class: 'badge badge-blue' }, MODES.find(m => m.id === s.mode)?.label || s.mode || 'Réception'),
+                h('span', { style: 'font-size:12px;color:var(--muted)' }, new Date(s.created_at).toLocaleDateString('fr-FR'))
+              )
+            ),
+            h('div', { style: 'display:flex;gap:8px;align-items:center' },
+              h('span', { class: 'badge badge-green' }, '+' + totalPos),
+              h('span', { class: 'badge badge-red' }, '-' + totalNeg),
+              h('span', { style: 'color:var(--muted)' }, expanded ? '▲' : '▼')
+            )
+          ),
+          expanded ? h('div', { class: 'sess-card-bd' },
+            scans.length === 0 ? h('div', { style: 'color:var(--muted);font-size:13px;text-align:center;padding:1rem' }, 'Aucun scan') :
+            h('div', { style: 'overflow-x:auto' },
+              h('table', { class: 'tbl' },
+                h('thead', {}, h('tr', {}, h('th', {}, 'Produit'), h('th', {}, 'SKU'), h('th', {}, 'Entrées +'), h('th', {}, 'Sorties -'), h('th', {}, 'Écart net'))),
+                h('tbody', {}, ...scans.map(sc => {
+                  const net = (sc.qty_pos || 0) - (sc.qty_neg || 0);
+                  return h('tr', {},
+                    h('td', { style: 'font-weight:500' }, sc.nom || '—'),
+                    h('td', {}, h('span', { class: 'sku-badge' }, sc.sku)),
+                    h('td', {}, h('span', { style: 'color:var(--green);font-weight:600' }, '+' + (sc.qty_pos || 0))),
+                    h('td', {}, h('span', { style: 'color:var(--red);font-weight:600' }, '-' + (sc.qty_neg || 0))),
+                    h('td', {}, h('span', { style: `font-weight:700;color:${net >= 0 ? 'var(--green)' : 'var(--red)'}` }, (net >= 0 ? '+' : '') + net))
+                  );
+                }))
+              )
+            )
+          ) : null
+        );
+      })
+    )
+  );
+}
+
+function renderDefectueux() {
+  return h('div', { class: 'page' },
+    h('div', { class: 'page-hd' },
+      h('h2', {}, '⚠ Défectueux'),
+      h('div', { style: 'display:flex;gap:8px' },
+        h('button', { class: 'btn btn-warn btn-sm', onClick: () => set({ mDefect: { sku: '', nom: '' } }) }, '+ Signaler'),
+        h('button', { class: 'btn btn-outline btn-sm', onClick: exportExcel }, '⬇ Export')
+      )
+    ),
+    S.loadingDef ? h('div', { class: 'loading' }, h('div', { class: 'spinner' })) :
+    S.defectueux.length === 0 ? h('div', { class: 'empty' }, h('div', { class: 'empty-icon' }, '✅'), h('div', { class: 'empty-text' }, 'Aucun défectueux enregistré')) :
+    h('div', { class: 'page-body' },
+      h('table', { class: 'tbl' },
+        h('thead', {}, h('tr', {}, h('th', {}, 'Produit'), h('th', {}, 'SKU'), h('th', {}, 'Type de défaut'), h('th', {}, 'Note'), h('th', {}, 'Session'), h('th', {}, 'Date'))),
+        h('tbody', {}, ...S.defectueux.map(d => h('tr', {},
+          h('td', { style: 'font-weight:500' }, d.nom || '—'),
+          h('td', {}, h('span', { class: 'sku-badge' }, d.sku)),
+          h('td', {}, h('span', { class: 'badge badge-orange' }, d.type_defaut)),
+          h('td', { style: 'color:var(--muted);max-width:200px' }, d.note || '—'),
+          h('td', { style: 'color:var(--muted);font-size:12px' }, d.session_id ? '●' : '—'),
+          h('td', { style: 'color:var(--muted);font-size:12px;white-space:nowrap' }, new Date(d.created_at).toLocaleDateString('fr-FR'))
+        )))
+      )
+    )
+  );
+}
+
+function renderCatalogue() {
+  const filtered = S.catalogue.filter(p =>
+    !S.searchCat || p.sku.includes(S.searchCat.toUpperCase()) || p.nom.toLowerCase().includes(S.searchCat.toLowerCase())
+  );
+  return h('div', { class: 'page' },
+    h('div', { class: 'page-hd' },
+      h('h2', {}, '📚 Catalogue'),
+      h('div', { style: 'display:flex;gap:8px;align-items:center' },
+        h('input', { type: 'text', placeholder: 'SKU ou nom…', style: 'width:200px', value: S.searchCat, onInput: e => set({ searchCat: e.target.value }) }),
+        h('button', { class: 'btn btn-outline btn-sm', onClick: () => set({ mCsv: true }) }, '⬆ Import CSV'),
+        h('button', { class: 'btn btn-primary btn-sm', onClick: () => set({ mAddProd: true }) }, '+ Ajouter')
+      )
+    ),
+    filtered.length === 0 ? h('div', { class: 'empty' }, h('div', { class: 'empty-icon' }, '📦'), h('div', { class: 'empty-text' }, 'Catalogue vide — importez un CSV Shopify ou ajoutez manuellement')) :
+    h('div', { class: 'page-body' },
+      h('table', { class: 'tbl' },
+        h('thead', {}, h('tr', {}, h('th', {}, ''), h('th', {}, 'SKU'), h('th', {}, 'Nom'), h('th', {}, 'Catégorie'), h('th', {}, 'Taille'))),
+        h('tbody', {}, ...filtered.map(p => h('tr', {},
+          h('td', {}, p.image_url ? h('img', { src: p.image_url, class: 'img-thumb', alt: p.nom }) : h('div', { class: 'img-placeholder' }, '📦')),
+          h('td', {}, h('span', { class: 'sku-badge' }, p.sku)),
+          h('td', { style: 'font-weight:500;color:var(--text)' }, p.nom),
+          h('td', {}, p.categorie ? h('span', { class: 'cat-badge' }, p.categorie) : h('span', { style: 'color:var(--muted)' }, '—')),
+          h('td', {}, p.taille ? h('span', { class: 'taille-link' }, p.taille) : h('span', { style: 'color:var(--muted)' }, '—'))
+        )))
+      )
+    )
+  );
+}
+
+// ── MODALS ─────────────────────────────────────────────────────────────────
+function renderModalPacking() {
+  if (!S.mPacking) return null;
+  const existing = S.packingList;
+
+  return h('div', { class: 'modal-overlay', onClick: e => { if (e.target.className === 'modal-overlay') set({ mPacking: false }); } },
+    h('div', { class: 'modal modal-lg' },
+      h('div', { class: 'modal-hd' },
+        h('h3', {}, '📋 Configurer la Packing List'),
+        h('button', { class: 'modal-close', onClick: () => set({ mPacking: false }) }, '×')
+      ),
+      h('div', { class: 'modal-body' },
+        h('div', { class: 'alert alert-info' }, '⚠ La packing list est liée à la session en cours uniquement. Elle est effacée automatiquement à la clôture.'),
+        existing ? h('div', { class: 'alert alert-warn' }, `Liste active : ${existing.length} références · ${existing.reduce((a, p) => a + (p.attendu || 1), 0)} articles attendus`) : null,
+        h('div', { class: 'form-row' },
+          h('label', {}, 'Coller votre liste (format : SKU;quantité, une ligne par référence)'),
+          h('textarea', { rows: '10', id: 'plText', style: 'font-family:var(--mono);font-size:12px;', placeholder: 'SKU-XS-BLDY;5\nSKU-M-DKR;3\nSKU-L-RED;2\n...' })
+        ),
+        existing ? h('div', {},
+          h('div', { class: 'divider' }),
+          h('div', { style: 'font-weight:600;margin-bottom:10px;font-size:13px' }, 'Liste actuelle'),
+          h('div', { style: 'max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius)' },
+            h('table', { class: 'tbl' },
+              h('thead', {}, h('tr', {}, h('th', {}, 'SKU'), h('th', {}, 'Nom'), h('th', {}, 'Attendu'))),
+              h('tbody', {}, ...existing.map(p => h('tr', {},
+                h('td', {}, h('span', { class: 'sku-badge' }, p.sku)),
+                h('td', {}, p.nom),
+                h('td', {}, h('span', { style: 'font-family:var(--mono);font-weight:600' }, p.attendu))
+              )))
+            )
+          )
+        ) : null
+      ),
+      h('div', { class: 'modal-ft' },
+        existing ? h('button', { class: 'btn btn-danger', onClick: () => { if (confirm('Effacer la packing list ?')) set({ packingList: null, mPacking: false }); } }, '✕ Effacer la liste') : null,
+        h('button', { class: 'btn btn-outline', onClick: () => set({ mPacking: false }) }, 'Annuler'),
+        h('button', {
+          class: 'btn btn-primary',
+          onClick: () => {
+            const text = document.getElementById('plText')?.value?.trim();
+            if (!text) { set({ mPacking: false }); return; }
+            const lines = text.split('\n').filter(Boolean);
+            const list = lines.map(l => {
+              const parts = l.split(/[;,\t]/);
+              const sku = parts[0]?.trim().toUpperCase();
+              const attendu = parseInt(parts[1]) || 1;
+              const produit = S.catalogue.find(p => p.sku === sku);
+              return { sku, nom: produit?.nom || sku, cat: produit?.categorie || '', taille: produit?.taille || '', attendu };
+            }).filter(p => p.sku);
+            if (!list.length) return;
+            set({ packingList: list, mPacking: false });
+          }
+        }, '✓ Activer')
+      )
+    )
+  );
+}
+
+function renderModalDefect() {
+  if (!S.mDefect) return null;
+  let selType = '';
+  const { sku, nom } = S.mDefect;
+  return h('div', { class: 'modal-overlay', onClick: e => { if (e.target.className === 'modal-overlay') set({ mDefect: null }); } },
+    h('div', { class: 'modal modal-sm' },
+      h('div', { class: 'modal-hd' },
+        h('h3', {}, '⚠ Signaler un défaut'),
+        h('button', { class: 'modal-close', onClick: () => set({ mDefect: null }) }, '×')
+      ),
+      h('div', { class: 'modal-body' },
+        !sku ? h('div', { class: 'form-row' },
+          h('label', {}, 'SKU'),
+          h('input', { type: 'text', id: 'def-sku', placeholder: 'SKU du produit' })
+        ) : h('div', { class: 'alert alert-info', style: 'margin-bottom:14px' },
+          h('strong', {}, nom), h('br', {}), h('span', { style: 'font-family:var(--mono);font-size:11px' }, sku)
+        ),
+        h('label', { style: 'margin-bottom:8px;display:block' }, 'Type de défaut *'),
+        h('div', { class: 'defect-grid' },
+          ...DEFECT_TYPES.map(t => h('button', {
+            class: 'defect-btn', id: 'def-' + t,
+            onClick: () => {
+              selType = t;
+              document.querySelectorAll('.defect-btn').forEach(b => b.classList.remove('sel'));
+              document.getElementById('def-' + t)?.classList.add('sel');
+            }
+          }, t))
+        ),
+        h('div', { class: 'form-row' },
+          h('label', {}, 'Note (optionnel)'),
+          h('textarea', { rows: '3', id: 'def-note', placeholder: 'Détails supplémentaires…' })
+        )
+      ),
+      h('div', { class: 'modal-ft' },
+        h('button', { class: 'btn btn-outline', onClick: () => set({ mDefect: null }) }, 'Annuler'),
+        h('button', {
+          class: 'btn btn-warn',
+          onClick: async () => {
+            const finalSku = sku || document.getElementById('def-sku')?.value?.trim().toUpperCase();
+            const note = document.getElementById('def-note')?.value?.trim();
+            if (!finalSku) return alert('SKU requis');
+            if (!selType) return alert('Sélectionnez un type de défaut');
+            const produit = S.catalogue.find(p => p.sku === finalSku);
+            await dbSaveDefect(finalSku, produit?.nom || nom || finalSku, selType, note, S.session?.id);
+            set({ mDefect: null });
+            loadDefectueux();
+          }
+        }, '⚠ Enregistrer')
+      )
+    )
+  );
+}
+
+function renderModalAddProd() {
+  if (!S.mAddProd) return null;
+  return h('div', { class: 'modal-overlay', onClick: e => { if (e.target.className === 'modal-overlay') set({ mAddProd: false }); } },
+    h('div', { class: 'modal modal-sm' },
+      h('div', { class: 'modal-hd' }, h('h3', {}, '+ Ajouter un produit'), h('button', { class: 'modal-close', onClick: () => set({ mAddProd: false }) }, '×')),
+      h('div', { class: 'modal-body' },
+        h('div', { class: 'form-row' }, h('label', {}, 'SKU *'), h('input', { type: 'text', id: 'ap-sku', placeholder: 'SKU-XS-001' })),
+        h('div', { class: 'form-row' }, h('label', {}, 'Nom *'), h('input', { type: 'text', id: 'ap-nom', placeholder: 'Nom du produit' })),
+        h('div', { style: 'display:grid;grid-template-columns:1fr 1fr;gap:10px' },
+          h('div', { class: 'form-row' }, h('label', {}, 'Catégorie'), h('input', { type: 'text', id: 'ap-cat', placeholder: 'ex: Hoodie' })),
+          h('div', { class: 'form-row' }, h('label', {}, 'Taille'), h('input', { type: 'text', id: 'ap-taille', placeholder: 'ex: XS' }))
+        ),
+        h('div', { class: 'form-row' }, h('label', {}, 'URL image (optionnel)'), h('input', { type: 'text', id: 'ap-img', placeholder: 'https://...' }))
+      ),
+      h('div', { class: 'modal-ft' },
+        h('button', { class: 'btn btn-outline', onClick: () => set({ mAddProd: false }) }, 'Annuler'),
+        h('button', {
+          class: 'btn btn-primary',
+          onClick: async () => {
+            const sku = document.getElementById('ap-sku')?.value?.trim().toUpperCase();
+            const nom = document.getElementById('ap-nom')?.value?.trim();
+            const cat = document.getElementById('ap-cat')?.value?.trim();
+            const taille = document.getElementById('ap-taille')?.value?.trim();
+            const img = document.getElementById('ap-img')?.value?.trim();
+            if (!sku || !nom) return alert('SKU et Nom requis');
+            const ok = await dbAddProduct(sku, nom, cat, taille, img);
+            if (ok) { set({ mAddProd: false }); loadCatalogue(); }
+            else alert('Erreur — ce SKU existe peut-être déjà');
+          }
+        }, 'Ajouter')
+      )
+    )
+  );
+}
+
+function renderModalCsv() {
+  if (!S.mCsv) return null;
+  return h('div', { class: 'modal-overlay', onClick: e => { if (e.target.className === 'modal-overlay') set({ mCsv: false }); } },
+    h('div', { class: 'modal' },
+      h('div', { class: 'modal-hd' }, h('h3', {}, '⬆ Import CSV Shopify'), h('button', { class: 'modal-close', onClick: () => set({ mCsv: false }) }, '×')),
+      h('div', { class: 'modal-body' },
+        h('div', { class: 'alert alert-info' }, 'Colonnes supportées : Variant SKU, Title, Type (catégorie), Option1 Value (taille), Image Src. Export Shopify standard compatible.'),
+        h('div', { class: 'form-row' }, h('label', {}, 'Fichier CSV'), h('input', { type: 'file', accept: '.csv', id: 'csv-file', style: 'padding:6px' }))
+      ),
+      h('div', { class: 'modal-ft' },
+        h('button', { class: 'btn btn-outline', onClick: () => set({ mCsv: false }) }, 'Annuler'),
+        h('button', {
+          class: 'btn btn-primary',
+          onClick: () => {
+            const file = document.getElementById('csv-file')?.files?.[0];
+            if (!file) return alert('Sélectionnez un fichier');
+            const reader = new FileReader();
+            reader.onload = async e => {
+              const text = e.target.result;
+              const lines = text.split('\n');
+              const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, '').toLowerCase());
+              const idx = k => headers.findIndex(h => h === k);
+              const skuIdx = idx('variant sku') !== -1 ? idx('variant sku') : idx('sku');
+              const nomIdx = idx('title') !== -1 ? idx('title') : idx('nom');
+              const catIdx = idx('type') !== -1 ? idx('type') : idx('product type');
+              const tailleIdx = idx('option1 value') !== -1 ? idx('option1 value') : idx('taille');
+              const imgIdx = idx('image src') !== -1 ? idx('image src') : idx('image_url');
+              if (skuIdx < 0) return alert('Colonne SKU introuvable');
+              const rows = lines.slice(1).map(l => {
+                const cols = l.split(',').map(c => c.trim().replace(/^"|"$/g, ''));
+                return { sku: cols[skuIdx]?.toUpperCase(), nom: cols[nomIdx] || '', categorie: cols[catIdx] || '', taille: cols[tailleIdx] || '', image_url: cols[imgIdx] || '' };
+              }).filter(r => r.sku);
+              for (const row of rows) {
+                await db.from('catalogue').upsert(row, { onConflict: 'sku' });
+              }
+              await loadCatalogue();
+              set({ mCsv: false });
+              alert(`${rows.length} produits importés`);
+            };
+            reader.readAsText(file);
+          }
+        }, 'Importer')
+      )
+    )
+  );
+}
+
+// ── RENDER ─────────────────────────────────────────────────────────────────
+function render() {
+  const app = document.getElementById('app');
+  if (!app) return;
+  app.innerHTML = '';
+
+  if (!S.authed) { app.appendChild(renderPin()); setTimeout(() => document.getElementById('pinInput')?.focus(), 50); return; }
+
+  app.appendChild(renderNav());
+
+  let page;
+  if (S.page === 'scanner') page = renderScanner();
+  else if (S.page === 'sessions') page = renderSessions();
+  else if (S.page === 'defectueux') page = renderDefectueux();
+  else if (S.page === 'catalogue') page = renderCatalogue();
+  if (page) app.appendChild(page);
+
+  [renderModalPacking(), renderModalDefect(), renderModalAddProd(), renderModalCsv()].filter(Boolean).forEach(m => app.appendChild(m));
+
+  if (S.page === 'scanner' && S.session) setTimeout(() => document.getElementById('scanInput')?.focus(), 50);
+}
+
+render();
+if (S.authed) { loadCatalogue(); loadSessions(); loadDefectueux(); }
+</script>
+
+<!--
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SQL À COLLER DANS SUPABASE SQL EDITOR
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+create table if not exists catalogue (
+  id uuid primary key default gen_random_uuid(),
+  sku text unique not null,
+  nom text not null,
+  categorie text,
+  taille text,
+  image_url text,
+  created_at timestamptz default now()
+);
+
+create table if not exists sessions (
+  id uuid primary key default gen_random_uuid(),
+  nom text not null,
+  mode text default 'reception',
+  status text default 'active',
+  closed_at timestamptz,
+  created_at timestamptz default now()
+);
+
+create table if not exists scans (
+  id uuid primary key default gen_random_uuid(),
+  session_id uuid references sessions(id) on delete cascade,
+  sku text not null,
+  nom text,
+  qty_pos int default 0,
+  qty_neg int default 0,
+  created_at timestamptz default now()
+);
+
+create table if not exists defectueux (
+  id uuid primary key default gen_random_uuid(),
+  sku text not null,
+  nom text,
+  type_defaut text not null,
+  note text,
+  session_id uuid references sessions(id),
+  created_at timestamptz default now()
+);
+
+alter table catalogue disable row level security;
+alter table sessions disable row level security;
+alter table scans disable row level security;
+alter table defectueux disable row level security;
+-->
+</body>
+</html>
